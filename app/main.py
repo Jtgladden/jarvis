@@ -8,9 +8,9 @@ from fastapi.responses import JSONResponse
 
 from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, classify_cleanup_email, classify_email, classify_new_email_ai_fallback
 from app.config import CORS_ALLOWED_ORIGINS, OPENAI_MAX_EMAILS_PER_RUN
-from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_emails_by_any_label, get_mailbox_emails, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, update_email
+from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_emails_by_any_label, get_mailbox_emails, get_mailbox_emails_page, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, update_email
 from app.rules import classify_new_email_rule
-from app.schemas import CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleProcessResponse
+from app.schemas import CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleProcessResponse
 
 app = FastAPI(title="Mail AI", version="0.1.0")
 api = APIRouter(prefix="/api")
@@ -138,19 +138,18 @@ def api_root():
     return {"message": "Mail AI backend is running"}
 
 
-@api.get("/emails", response_model=list[EmailSummary])
+@api.get("/emails", response_model=EmailPageResponse)
 def list_emails(
-    limit: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
     mailbox: str = Query(default="INBOX"),
+    page_token: str | None = Query(default=None),
 ):
     normalized_mailbox = mailbox.strip() or "INBOX"
-    if normalized_mailbox.upper() != "INBOX":
-        return get_mailbox_emails(mailbox=normalized_mailbox, limit=limit)
-
-    if limit is None:
-        return get_all_inbox_emails()
-
-    return get_recent_inbox_emails(max_results=limit)
+    return get_mailbox_emails_page(
+        mailbox=normalized_mailbox,
+        limit=limit,
+        page_token=page_token,
+    )
 
 
 @api.get("/labels", response_model=list[GmailLabel])

@@ -12,7 +12,7 @@ from googleapiclient.errors import HttpError
 
 from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, canonicalize_importance_label
 from app.config import GMAIL_SCOPES, GMAIL_TOKEN_FILE, GMAIL_CREDENTIALS_FILE
-from app.schemas import CleanupDecision, CleanupItem, CleanupResponse, CleanupSummary, EmailClassification, EmailSummary, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleDecision, RuleItem, RuleProcessResponse, RuleSummary
+from app.schemas import CleanupDecision, CleanupItem, CleanupResponse, CleanupSummary, EmailClassification, EmailPageResponse, EmailSummary, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleDecision, RuleItem, RuleProcessResponse, RuleSummary
 
 REVIEWED_LABEL = "Reviewed"
 ALL_IMPORTANCE_LABEL_NAMES = {
@@ -273,6 +273,31 @@ def _list_message_ids(
     return message_ids
 
 
+def _list_message_page(
+    service,
+    label_ids: Optional[List[str]] = None,
+    limit: int = 50,
+    page_token: Optional[str] = None,
+) -> tuple[List[str], Optional[str]]:
+    request = service.users().messages().list(
+        userId="me",
+        maxResults=max(1, min(limit, 100)),
+        pageToken=page_token,
+    )
+    if label_ids:
+        request = service.users().messages().list(
+            userId="me",
+            labelIds=label_ids,
+            maxResults=max(1, min(limit, 100)),
+            pageToken=page_token,
+        )
+
+    response = request.execute()
+    messages = response.get("messages", [])
+    message_ids = [msg["id"] for msg in messages]
+    return message_ids, response.get("nextPageToken")
+
+
 def get_recent_inbox_emails(max_results: int = 10) -> List[EmailSummary]:
     service = get_gmail_service()
     label_id_to_name, _ = get_label_maps(service)
@@ -394,6 +419,38 @@ def get_mailbox_emails(mailbox: str = "INBOX", limit: Optional[int] = None) -> L
 
     message_ids = _list_message_ids(service, label_ids=label_ids, limit=limit)
     return [_fetch_message(service, msg_id, label_id_to_name) for msg_id in message_ids]
+
+
+def get_mailbox_emails_page(
+    mailbox: str = "INBOX",
+    limit: int = 50,
+    page_token: Optional[str] = None,
+) -> EmailPageResponse:
+    service = get_gmail_service()
+    label_id_to_name, name_to_id = get_label_maps(service)
+
+    normalized_mailbox = (mailbox or "INBOX").strip()
+    label_ids: Optional[List[str]]
+    if normalized_mailbox.upper() == "ALL":
+        label_ids = None
+    elif normalized_mailbox.upper() == "INBOX":
+        label_ids = ["INBOX"]
+    else:
+        label_id = name_to_id.get(normalized_mailbox)
+        if not label_id:
+            return EmailPageResponse(items=[], next_page_token=None)
+        label_ids = [label_id]
+
+    message_ids, next_token = _list_message_page(
+        service,
+        label_ids=label_ids,
+        limit=limit,
+        page_token=page_token,
+    )
+    return EmailPageResponse(
+        items=[_fetch_message(service, msg_id, label_id_to_name) for msg_id in message_ids],
+        next_page_token=next_token,
+    )
 
 
 def get_new_inbox_emails(limit: Optional[int] = None, unread_only: bool = True) -> List[EmailSummary]:
@@ -523,6 +580,33 @@ def _apply_rule_decision(service, email: EmailSummary, decision: RuleDecision, l
     )
 
 
+def _modify_thread(
+    service,
+    thread_id: str,
+    add_label_ids: List[str],
+    remove_label_ids: List[str],
+) -> None:
+    deduped_add = [label_id for label_id in dict.fromkeys(add_label_ids) if label_id not in remove_label_ids]
+    deduped_remove = list(dict.fromkeys(remove_label_ids))
+
+    if not deduped_add and not deduped_remove:
+        return
+
+    (
+        service.users()
+        .threads()
+        .modify(
+            userId="me",
+            id=thread_id,
+            body={
+                "addLabelIds": deduped_add,
+                "removeLabelIds": deduped_remove,
+            },
+        )
+        .execute()
+    )
+
+
 def mark_email_handled(message_id: str) -> HandleEmailResponse:
     service = get_gmail_service()
     label_id_to_name, label_name_to_id = get_label_maps(service)
@@ -547,20 +631,12 @@ def mark_email_handled(message_id: str) -> HandleEmailResponse:
         if label_id and label_name in email.labels:
             remove_label_ids.append(label_id)
 
-    if add_label_ids or remove_label_ids:
-        (
-            service.users()
-            .messages()
-            .modify(
-                userId="me",
-                id=message_id,
-                body={
-                    "addLabelIds": add_label_ids,
-                    "removeLabelIds": remove_label_ids,
-                },
-            )
-            .execute()
-        )
+    _modify_thread(
+        service,
+        email.thread_id,
+        add_label_ids=add_label_ids,
+        remove_label_ids=remove_label_ids,
+    )
 
     return HandleEmailResponse(
         message_id=message_id,
@@ -608,23 +684,20 @@ def update_email(
     elif unread is False:
         remove_label_ids.append("UNREAD")
 
-    deduped_add = [label_id for label_id in dict.fromkeys(add_label_ids) if label_id not in remove_label_ids]
-    deduped_remove = list(dict.fromkeys(remove_label_ids))
+    full_msg = (
+        service.users()
+        .messages()
+        .get(userId="me", id=message_id, format="full")
+        .execute()
+    )
+    email = _to_email_summary(full_msg, label_id_to_name)
 
-    if deduped_add or deduped_remove:
-        (
-            service.users()
-            .messages()
-            .modify(
-                userId="me",
-                id=message_id,
-                body={
-                    "addLabelIds": deduped_add,
-                    "removeLabelIds": deduped_remove,
-                },
-            )
-            .execute()
-        )
+    _modify_thread(
+        service,
+        email.thread_id,
+        add_label_ids=add_label_ids,
+        remove_label_ids=remove_label_ids,
+    )
 
     updated_email = _fetch_message(service, message_id, label_id_to_name)
     return EmailUpdateResponse(email=updated_email)

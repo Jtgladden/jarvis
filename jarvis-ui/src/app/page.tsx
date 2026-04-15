@@ -53,6 +53,11 @@ type Email = {
   cleanupDecision?: CleanupDecision;
 };
 
+type EmailPageResponse = {
+  items: Email[];
+  next_page_token?: string | null;
+};
+
 type GmailLabel = {
   id: string;
   name: string;
@@ -163,6 +168,31 @@ function emailMatchesMailbox(email: Email, mailbox: string) {
   return (email.labels || []).includes(mailbox);
 }
 
+function groupEmailsByThread(emails: Email[]) {
+  const grouped = new Map<
+    string,
+    {
+      email: Email;
+      count: number;
+    }
+  >();
+
+  for (const email of emails) {
+    const existing = grouped.get(email.thread_id);
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+
+    grouped.set(email.thread_id, {
+      email,
+      count: 1,
+    });
+  }
+
+  return Array.from(grouped.values());
+}
+
 function isEditableLabel(label: GmailLabel) {
   return label.type === "user";
 }
@@ -239,6 +269,9 @@ function EmailListItem({
 
 export default function HomePage() {
   const [emails, setEmails] = useState<Email[]>([]);
+  const [rawNextPageToken, setRawNextPageToken] = useState<string | null>(null);
+  const [rawPageToken, setRawPageToken] = useState<string | null>(null);
+  const [rawPageHistory, setRawPageHistory] = useState<string[]>([]);
   const [labels, setLabels] = useState<GmailLabel[]>([]);
   const [loading, setLoading] = useState(false);
   const [labelsLoading, setLabelsLoading] = useState(false);
@@ -290,7 +323,8 @@ export default function HomePage() {
 
   const loadEmails = async (
     currentMode: "classified" | "raw" = mode,
-    mailboxOverride?: string
+    mailboxOverride?: string,
+    pageTokenOverride?: string | null
   ) => {
     setLoading(true);
     setError("");
@@ -299,11 +333,16 @@ export default function HomePage() {
       const trimmed = inboxLimit.trim();
       const limit = trimmed ? Number(trimmed) : NaN;
       const params = new URLSearchParams();
-      if (trimmed && Number.isFinite(limit) && limit > 0) {
-        params.set("limit", String(Math.floor(limit)));
-      }
       if (currentMode === "raw") {
+        const pageSize =
+          trimmed && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 50;
+        params.set("limit", String(pageSize));
         params.set("mailbox", mailboxOverride ?? selectedMailbox);
+        if (pageTokenOverride) {
+          params.set("page_token", pageTokenOverride);
+        }
+      } else if (trimmed && Number.isFinite(limit) && limit > 0) {
+        params.set("limit", String(Math.floor(limit)));
       }
       const endpoint = currentMode === "classified" ? "/classify" : "/emails";
       const queryString = params.toString() ? `?${params.toString()}` : "";
@@ -322,9 +361,17 @@ export default function HomePage() {
               ...item.email,
               classification: item.classification,
             }))
-          : data;
+          : (data as EmailPageResponse).items;
 
       setEmails(normalized);
+      if (currentMode === "raw") {
+        setRawPageToken(pageTokenOverride ?? null);
+        setRawNextPageToken((data as EmailPageResponse).next_page_token ?? null);
+      } else {
+        setRawPageToken(null);
+        setRawNextPageToken(null);
+        setRawPageHistory([]);
+      }
       setCleanupSummary(null);
       setCleanupJob(null);
       syncSelectedId(normalized);
@@ -505,6 +552,13 @@ export default function HomePage() {
   }, [mode, selectedMailbox]);
 
   useEffect(() => {
+    if (mode !== "raw") return;
+    setRawPageToken(null);
+    setRawNextPageToken(null);
+    setRawPageHistory([]);
+  }, [mode, selectedMailbox]);
+
+  useEffect(() => {
     if (!cleanupJob || (cleanupJob.status !== "queued" && cleanupJob.status !== "running")) {
       return;
     }
@@ -573,9 +627,17 @@ export default function HomePage() {
     });
   }, [emails, query]);
 
+  const groupedRawEmails = useMemo(() => groupEmailsByThread(filteredEmails), [filteredEmails]);
+  const displayEmails = mode === "raw" ? groupedRawEmails.map((item) => item.email) : filteredEmails;
+  const threadCountByEmailId = useMemo(
+    () =>
+      new Map(groupedRawEmails.map((item) => [item.email.id, item.count])),
+    [groupedRawEmails]
+  );
+
   const selectedEmail =
-    filteredEmails.find((email) => email.id === selectedId) ||
-    filteredEmails[0] ||
+    displayEmails.find((email) => email.id === selectedId) ||
+    displayEmails[0] ||
     null;
   const canMarkHandled = mode === "classified" && hasImportantLabel(selectedEmail?.labels);
   const isUnread = emailHasLabel(selectedEmail, "UNREAD");
@@ -620,6 +682,8 @@ export default function HomePage() {
     cleanupJob && cleanupJob.total > 0
       ? Math.min(100, Math.round((cleanupJob.processed / cleanupJob.total) * 100))
       : 0;
+  const rawHasPreviousPage = rawPageHistory.length > 0;
+  const selectedThreadCount = selectedEmail ? threadCountByEmailId.get(selectedEmail.id) ?? 1 : 1;
 
   return (
     <div className="min-h-screen bg-zinc-100 p-6 text-zinc-900">
@@ -656,6 +720,9 @@ export default function HomePage() {
               className="rounded-2xl"
               variant="outline"
               onClick={() => {
+                setRawPageToken(null);
+                setRawNextPageToken(null);
+                setRawPageHistory([]);
                 void loadLabels();
                 void loadEmails(mode, selectedMailbox);
               }}
@@ -673,7 +740,7 @@ export default function HomePage() {
               value={inboxLimit}
               onChange={(e) => setInboxLimit(e.target.value)}
               className="w-full rounded-2xl sm:w-36"
-              placeholder={mode === "raw" ? "Mailbox cap" : "Summary cap"}
+              placeholder={mode === "raw" ? "Page size" : "Summary cap"}
             />
           </div>
         </div>
@@ -891,6 +958,43 @@ export default function HomePage() {
                   className="rounded-2xl pl-9"
                 />
               </div>
+
+              {mode === "raw" ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs text-zinc-500">
+                    Showing one row per loaded thread on this page.
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-2xl"
+                      onClick={() => {
+                        const history = [...rawPageHistory];
+                        const previousToken = history.pop() ?? null;
+                        setRawPageHistory(history);
+                        void loadEmails("raw", selectedMailbox, previousToken);
+                      }}
+                      disabled={loading || !rawHasPreviousPage}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-2xl"
+                      onClick={() => {
+                        if (!rawNextPageToken) return;
+                        setRawPageHistory((current) => [...current, rawPageToken ?? ""]);
+                        void loadEmails("raw", selectedMailbox, rawNextPageToken);
+                      }}
+                      disabled={loading || !rawNextPageToken}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </CardHeader>
 
             <CardContent>
@@ -903,20 +1007,29 @@ export default function HomePage() {
 
               <ScrollArea className="h-[65vh] pr-3">
                 <div className="space-y-3">
-                  {filteredEmails.length === 0 && !loading && !cleanupLoading ? (
+                  {displayEmails.length === 0 && !loading && !cleanupLoading ? (
                     <div className="rounded-2xl border border-dashed border-zinc-300 p-6 text-sm text-zinc-500">
                       No emails found.
                     </div>
                   ) : null}
 
-                  {filteredEmails.map((email) => (
-                    <EmailListItem
-                      key={email.id}
-                      email={email}
-                      selected={selectedEmail?.id === email.id}
-                      onClick={() => setSelectedId(email.id)}
-                    />
-                  ))}
+                  {displayEmails.map((email) => {
+                    const threadCount = threadCountByEmailId.get(email.id) ?? 1;
+                    return (
+                      <div key={email.id} className="space-y-2">
+                        <EmailListItem
+                          email={email}
+                          selected={selectedEmail?.id === email.id}
+                          onClick={() => setSelectedId(email.id)}
+                        />
+                        {mode === "raw" && threadCount > 1 ? (
+                          <div className="px-3 text-xs text-zinc-500">
+                            {threadCount} messages loaded in this thread
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               </ScrollArea>
             </CardContent>
@@ -944,12 +1057,21 @@ export default function HomePage() {
                     {selectedEmail.date ? (
                       <div className="text-sm text-zinc-500">{selectedEmail.date}</div>
                     ) : null}
+                    {mode === "raw" && selectedThreadCount > 1 ? (
+                      <div className="text-sm text-zinc-500">
+                        This row represents {selectedThreadCount} loaded messages in the same
+                        thread.
+                      </div>
+                    ) : null}
                   </div>
 
                   {mode === "raw" ? (
                     <div className="rounded-2xl bg-zinc-50 p-4">
                       <div className="mb-3 text-xs uppercase tracking-wide text-zinc-500">
-                        Mail actions
+                        Conversation actions
+                      </div>
+                      <div className="mb-3 text-sm text-zinc-600">
+                        These actions apply to every loaded message in this Gmail thread.
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Button

@@ -123,3 +123,8 @@ class EmailUpdateRequest(BaseModel):
 
 class EmailUpdateResponse(BaseModel):
     email: EmailSummary
+
+
+class EmailPageResponse(BaseModel):
+    items: List[EmailSummary]
+    next_page_token: Optional[str] = None
