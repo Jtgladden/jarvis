@@ -126,6 +126,7 @@ def root():
     return {"message": "Mail AI backend is running"}
 
 
+@api.get("", response_model=dict[str, str], include_in_schema=False)
 @api.get("/", response_model=dict[str, str])
 def api_root():
     return {"message": "Mail AI backend is running"}
