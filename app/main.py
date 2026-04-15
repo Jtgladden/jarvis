@@ -2,8 +2,9 @@ from threading import Lock, Thread
 from time import sleep
 from uuid import uuid4
 
-from fastapi import APIRouter, FastAPI, HTTPException, Query
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, classify_cleanup_email, classify_email, classify_new_email_ai_fallback
 from app.config import CORS_ALLOWED_ORIGINS, OPENAI_MAX_EMAILS_PER_RUN
@@ -25,6 +26,11 @@ app.add_middleware(
 _cleanup_jobs: dict[str, CleanupJobStatus] = {}
 _cleanup_jobs_lock = Lock()
 _new_mail_sort_lock = Lock()
+
+
+@app.exception_handler(RuntimeError)
+async def runtime_error_handler(_: Request, exc: RuntimeError):
+    return JSONResponse(status_code=500, content={"detail": str(exc)})
 
 
 def _set_cleanup_job(job_id: str, **updates) -> CleanupJobStatus:

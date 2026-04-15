@@ -135,6 +135,19 @@ function normalizeCleanupItems(data: CleanupResponse): Email[] {
   }));
 }
 
+async function getErrorMessage(response: Response, fallback: string) {
+  try {
+    const data = await response.json();
+    if (data && typeof data.detail === "string" && data.detail.trim()) {
+      return data.detail;
+    }
+  } catch {
+    // Ignore malformed or empty error bodies and fall back to the caller message.
+  }
+
+  return fallback;
+}
+
 function hasImportantLabel(labels: string[] | undefined) {
   return (labels || []).some(
     (label) => label === IMPORTANT_LABEL || LEGACY_IMPORTANT_LABELS.has(label)
@@ -260,7 +273,9 @@ export default function HomePage() {
     try {
       const response = await fetch(`${API_BASE}/labels`);
       if (!response.ok) {
-        throw new Error(`Labels request failed with status ${response.status}`);
+        throw new Error(
+          await getErrorMessage(response, `Labels request failed with status ${response.status}`)
+        );
       }
 
       const data: GmailLabel[] = await response.json();
@@ -294,7 +309,9 @@ export default function HomePage() {
       const queryString = params.toString() ? `?${params.toString()}` : "";
       const response = await fetch(`${API_BASE}${endpoint}${queryString}`);
       if (!response.ok) {
-        throw new Error(`Request failed with status ${response.status}`);
+        throw new Error(
+          await getErrorMessage(response, `Request failed with status ${response.status}`)
+        );
       }
 
       const data = await response.json();
@@ -356,7 +373,9 @@ export default function HomePage() {
       });
 
       if (!response.ok) {
-        throw new Error(`Email update failed with status ${response.status}`);
+        throw new Error(
+          await getErrorMessage(response, `Email update failed with status ${response.status}`)
+        );
       }
 
       const data: EmailUpdateResponse = await response.json();
@@ -426,7 +445,9 @@ export default function HomePage() {
       });
 
       if (!response.ok) {
-        throw new Error(`Cleanup request failed with status ${response.status}`);
+        throw new Error(
+          await getErrorMessage(response, `Cleanup request failed with status ${response.status}`)
+        );
       }
 
       const data: CleanupJobStartResponse = await response.json();
@@ -456,7 +477,9 @@ export default function HomePage() {
       });
 
       if (!response.ok) {
-        throw new Error(`Handle request failed with status ${response.status}`);
+        throw new Error(
+          await getErrorMessage(response, `Handle request failed with status ${response.status}`)
+        );
       }
 
       setEmails((currentEmails) => {
@@ -490,7 +513,12 @@ export default function HomePage() {
       try {
         const response = await fetch(`${API_BASE}/cleanup/jobs/${cleanupJob.job_id}`);
         if (!response.ok) {
-          throw new Error(`Cleanup status failed with status ${response.status}`);
+          throw new Error(
+            await getErrorMessage(
+              response,
+              `Cleanup status failed with status ${response.status}`
+            )
+          );
         }
 
         const data: CleanupJobStatus = await response.json();

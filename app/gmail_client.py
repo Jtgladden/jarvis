@@ -8,6 +8,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, canonicalize_importance_label
 from app.config import GMAIL_SCOPES, GMAIL_TOKEN_FILE, GMAIL_CREDENTIALS_FILE
@@ -26,22 +27,53 @@ def get_gmail_service():
     creds: Optional[Credentials] = None
 
     if os.path.exists(GMAIL_TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, GMAIL_SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, GMAIL_SCOPES)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to read Gmail token file at {GMAIL_TOKEN_FILE}: {exc}"
+            ) from exc
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception as exc:
+                raise RuntimeError(f"Failed to refresh Gmail credentials: {exc}") from exc
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                GMAIL_CREDENTIALS_FILE,
-                GMAIL_SCOPES,
-            )
-            creds = flow.run_local_server(port=0)
+            if not os.path.exists(GMAIL_CREDENTIALS_FILE):
+                raise RuntimeError(
+                    "Gmail credentials are not configured. "
+                    f"Expected OAuth client file at {GMAIL_CREDENTIALS_FILE}."
+                )
 
-        with open(GMAIL_TOKEN_FILE, "w") as token:
-            token.write(creds.to_json())
+            try:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    GMAIL_CREDENTIALS_FILE,
+                    GMAIL_SCOPES,
+                )
+                creds = flow.run_local_server(port=0)
+            except Exception as exc:
+                raise RuntimeError(
+                    "Failed to complete Gmail OAuth flow. "
+                    "On a server deployment, make sure /data/credentials.json and /data/token.json "
+                    "exist in the container, or generate the token locally first."
+                ) from exc
 
-    return build("gmail", "v1", credentials=creds)
+        try:
+            with open(GMAIL_TOKEN_FILE, "w") as token:
+                token.write(creds.to_json())
+        except Exception as exc:
+            raise RuntimeError(
+                f"Authenticated with Gmail but failed to write token file at {GMAIL_TOKEN_FILE}: {exc}"
+            ) from exc
+
+    try:
+        return build("gmail", "v1", credentials=creds)
+    except HttpError as exc:
+        raise RuntimeError(f"Failed to initialize Gmail API client: {exc}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Failed to initialize Gmail service: {exc}") from exc
 
 
 def _get_header(headers: list[dict], name: str) -> str:
