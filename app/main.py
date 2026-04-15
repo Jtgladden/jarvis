@@ -1,3 +1,4 @@
+import logging
 from threading import Lock, Thread
 from time import sleep
 from uuid import uuid4
@@ -6,14 +7,19 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, classify_cleanup_email, classify_email, classify_new_email_ai_fallback
+from app.calendar_client import build_calendar_preview, create_calendar_event_from_plan_item, create_calendar_events_from_plan_items, create_calendar_event_from_preview, list_upcoming_events
+from app.classification_cache import get_cached_classification, init_classification_cache, save_classification, summarize_cached_classifications
+from app.classification_guidance import get_classification_guidance, init_classification_guidance, update_classification_guidance
+from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, classify_cleanup_email, classify_email, classify_new_email_ai_fallback
 from app.config import CORS_ALLOWED_ORIGINS, OPENAI_MAX_EMAILS_PER_RUN
-from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_emails_by_any_label, get_mailbox_emails, get_mailbox_emails_page, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, update_email
+from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_email_by_id, get_emails_by_any_label, get_mailbox_emails, get_mailbox_emails_page, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, update_email
+from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleProcessResponse
+from app.schemas import CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse
 
 app = FastAPI(title="Mail AI", version="0.1.0")
 api = APIRouter(prefix="/api")
+logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,6 +31,8 @@ app.add_middleware(
 
 _cleanup_jobs: dict[str, CleanupJobStatus] = {}
 _cleanup_jobs_lock = Lock()
+_planning_jobs: dict[str, PlanningJobStatus] = {}
+_planning_jobs_lock = Lock()
 _new_mail_sort_lock = Lock()
 
 
@@ -91,6 +99,38 @@ def _start_cleanup_job(limit: int | None, dry_run: bool) -> CleanupJobStartRespo
     return CleanupJobStartResponse(job_id=job_id, status="queued")
 
 
+def _set_planning_job(job_id: str, **updates) -> PlanningJobStatus:
+    with _planning_jobs_lock:
+        job = _planning_jobs[job_id]
+        _planning_jobs[job_id] = job.model_copy(update=updates)
+        return _planning_jobs[job_id]
+
+
+def _run_planning_job(job_id: str, goals: str, days: int) -> None:
+    try:
+        _set_planning_job(job_id, status="running")
+        result = generate_schedule_plan(goals=goals, days=days)
+        _set_planning_job(job_id, status="completed", result=result, error=None)
+    except Exception as exc:
+        logger.exception("Planning job failed")
+        _set_planning_job(job_id, status="failed", error=str(exc))
+
+
+def _start_planning_job(goals: str, days: int) -> PlanningJobStartResponse:
+    job_id = uuid4().hex
+    with _planning_jobs_lock:
+        _planning_jobs[job_id] = PlanningJobStatus(
+            job_id=job_id,
+            status="queued",
+            goals=goals,
+            days=days,
+        )
+
+    thread = Thread(target=_run_planning_job, args=(job_id, goals, days), daemon=True)
+    thread.start()
+    return PlanningJobStartResponse(job_id=job_id, status="queued")
+
+
 def _run_new_mail_sort_once(limit: int = 50) -> None:
     if not _new_mail_sort_lock.acquire(blocking=False):
         return
@@ -123,6 +163,8 @@ def _new_mail_sort_loop() -> None:
 
 @app.on_event("startup")
 def start_background_new_mail_sorter() -> None:
+    init_classification_cache()
+    init_classification_guidance()
     thread = Thread(target=_new_mail_sort_loop, daemon=True)
     thread.start()
 
@@ -152,27 +194,137 @@ def list_emails(
     )
 
 
+@api.get("/emails/{message_id}/classified", response_model=ClassifiedEmailResponse)
+def get_classified_email(message_id: str):
+    email = get_email_by_id(message_id)
+    classification = _get_or_create_classification(email)
+    return ClassifiedEmailResponse(email=email, classification=classification)
+
+
 @api.get("/labels", response_model=list[GmailLabel])
 def list_labels():
     return list_gmail_labels()
 
 
 @api.get("/classify")
-def classify_emails(limit: int | None = Query(default=None, ge=1)):
+def classify_emails(
+    limit: int | None = Query(default=None, ge=1),
+    bucket: str = Query(default="all"),
+    mailbox: str = Query(default="INBOX"),
+):
     requested_limit = (
         OPENAI_MAX_EMAILS_PER_RUN if limit is None else min(limit, OPENAI_MAX_EMAILS_PER_RUN)
     )
-    emails = get_emails_by_any_label([IMPORTANT_LABEL, *LEGACY_IMPORTANT_LABELS], limit=requested_limit)
+    normalized_bucket = bucket.strip().lower()
+    normalized_mailbox = mailbox.strip() or "INBOX"
+
+    emails = get_mailbox_emails(mailbox=normalized_mailbox, limit=requested_limit)
+
+    if normalized_bucket == "important":
+        emails = [
+            email
+            for email in emails
+            if any(label in {IMPORTANT_LABEL, *LEGACY_IMPORTANT_LABELS} for label in email.labels)
+        ]
+    elif normalized_bucket == "unimportant":
+        emails = [
+            email
+            for email in emails
+            if any(label in {UNIMPORTANT_LABEL, *LEGACY_UNIMPORTANT_LABELS} for label in email.labels)
+        ]
 
     results = []
     for email in emails:
-        classification = classify_email(email)
+        cached = get_cached_classification(email)
+        classification = cached.classification if cached else classify_email(email)
+        if cached is None:
+            save_classification(email, classification)
         results.append({
             "email": email,
             "classification": classification,
         })
 
     return results
+
+
+@api.get("/overview", response_model=ClassificationOverviewResponse)
+def classification_overview(
+    mailbox: str = Query(default=IMPORTANT_LABEL),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    return ClassificationOverviewResponse.model_validate(
+        summarize_cached_classifications(mailbox=mailbox, limit=limit)
+    )
+
+
+@api.get("/classification-guidance", response_model=ClassificationGuidanceResponse)
+def get_saved_classification_guidance():
+    return get_classification_guidance()
+
+
+@api.put("/classification-guidance", response_model=ClassificationGuidanceResponse)
+def put_saved_classification_guidance(payload: ClassificationGuidanceRequest):
+    return update_classification_guidance(payload.text)
+
+
+def _get_or_create_classification(email: EmailSummary):
+    cached = get_cached_classification(email)
+    if cached is not None:
+        return cached.classification
+
+    classification = classify_email(email)
+    save_classification(email, classification)
+    return classification
+
+
+@api.get("/calendar/preview/{message_id}", response_model=CalendarEventPreview)
+def calendar_preview(message_id: str):
+    email = get_email_by_id(message_id)
+    classification = _get_or_create_classification(email)
+    return build_calendar_preview(email, classification)
+
+
+@api.post("/calendar/create/{message_id}", response_model=CalendarEventCreateResponse)
+def calendar_create(message_id: str):
+    email = get_email_by_id(message_id)
+    classification = _get_or_create_classification(email)
+    preview = build_calendar_preview(email, classification)
+    return create_calendar_event_from_preview(preview)
+
+
+@api.get("/calendar/schedule", response_model=CalendarAgendaResponse)
+def calendar_schedule(
+    days: int = Query(default=7, ge=1, le=60),
+    max_results: int = Query(default=25, ge=1, le=200),
+):
+    return list_upcoming_events(days=days, max_results=max_results)
+
+
+@api.post("/planning/plan", response_model=PlanningJobStartResponse)
+def planning_plan(payload: PlanningRequest):
+    logger.warning("Planning route entered: days=%s goals_len=%s", payload.days, len(payload.goals or ""))
+    return _start_planning_job(goals=payload.goals, days=payload.days)
+
+
+@api.get("/planning/jobs/{job_id}", response_model=PlanningJobStatus)
+def planning_job_status(job_id: str):
+    with _planning_jobs_lock:
+        job = _planning_jobs.get(job_id)
+
+    if job is None:
+        raise HTTPException(status_code=404, detail="Planning job not found.")
+
+    return job
+
+
+@api.post("/planning/calendar", response_model=PlanningCalendarCreateResponse)
+def planning_calendar_create(payload: PlanningCalendarCreateRequest):
+    return create_calendar_event_from_plan_item(payload.item)
+
+
+@api.post("/planning/calendar/bulk", response_model=PlanningCalendarBulkCreateResponse)
+def planning_calendar_bulk_create(payload: PlanningCalendarBulkCreateRequest):
+    return create_calendar_events_from_plan_items(payload.items)
 
 
 @api.post("/cleanup/preview", response_model=CleanupJobStartResponse)

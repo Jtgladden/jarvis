@@ -3,14 +3,15 @@ from typing import Any
 
 from openai import OpenAI
 
+from app.classification_guidance import get_classification_guidance
 from app.config import OPENAI_API_KEY, OPENAI_EMAIL_BODY_PREVIEW_CHARS
 from app.schemas import CleanupDecision, EmailClassification, EmailSummary
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-IMPORTANT_LABEL = "Important"
-UNIMPORTANT_LABEL = "Unimportant"
-LEGACY_IMPORTANT_LABELS = {"AI Important", "Rules Important"}
-LEGACY_UNIMPORTANT_LABELS = {"AI Unimportant", "Rules Unimportant", "Rules Security", "Rules Shopping"}
+IMPORTANT_LABEL = "Jarvis Important"
+UNIMPORTANT_LABEL = "Jarvis Unimportant"
+LEGACY_IMPORTANT_LABELS = {"Important", "AI Important", "Rules Important"}
+LEGACY_UNIMPORTANT_LABELS = {"Unimportant", "AI Unimportant", "Rules Unimportant", "Rules Security", "Rules Shopping"}
 
 LOW_VALUE_KEYWORDS = {
     "promo",
@@ -77,6 +78,18 @@ def _fallback_classification(raw: str | None = None, reason: str = "AI response 
         needs_reply=False,
         urgency="low",
         suggested_action="keep",
+        short_summary="Fallback summary only. AI classification data was unavailable.",
+        why_it_matters="This email may still need manual review because the AI response failed.",
+        action_items=[],
+        deadline_hint=None,
+        suggested_reply=None,
+        calendar_relevant=False,
+        calendar_title=None,
+        calendar_start=None,
+        calendar_end=None,
+        calendar_is_all_day=False,
+        calendar_location=None,
+        calendar_notes=None,
         reason=reason,
         raw=raw,
     )
@@ -97,6 +110,20 @@ def _json_chat_completion(system_prompt: str, user_prompt: str) -> tuple[dict[st
     return json.loads(content), content
 
 
+def _classification_guidance_prompt() -> str:
+    guidance = get_classification_guidance().text.strip()
+    if not guidance:
+        return ""
+
+    return f"""
+
+Additional user guidance for classification:
+{guidance}
+
+Follow that guidance when it is relevant, while still grounding your answer in the actual email content.
+""".rstrip()
+
+
 def classify_email(email: EmailSummary) -> EmailClassification:
     body_preview = ""
     if OPENAI_EMAIL_BODY_PREVIEW_CHARS > 0:
@@ -110,8 +137,20 @@ Use exactly these fields:
 - needs_reply: boolean
 - urgency: one of [low, medium, high]
 - suggested_action: one of [keep, archive, label]
+- short_summary: one or two short sentences summarizing the email
+- why_it_matters: short explanation of why the user should care
+- action_items: array of short action items, can be empty
+- deadline_hint: short string for any explicit or implied deadline, otherwise empty string
+- suggested_reply: short string describing what a reply should accomplish, otherwise empty string
+- calendar_relevant: boolean, true only if this email clearly suggests a calendar event
+- calendar_title: short event title, otherwise empty string
+- calendar_start: RFC3339 datetime or YYYY-MM-DD for all-day events, otherwise empty string
+- calendar_end: RFC3339 datetime or YYYY-MM-DD for all-day events, otherwise empty string
+- calendar_is_all_day: boolean
+- calendar_location: short location string, otherwise empty string
+- calendar_notes: short event notes, otherwise empty string
 - reason: short explanation
-""".strip()
+""".strip() + _classification_guidance_prompt()
 
     user_prompt = f"""
 Email:
@@ -184,11 +223,11 @@ def classify_cleanup_email(email: EmailSummary, existing_labels=None) -> dict:
     system_prompt = """
 You are planning Gmail inbox cleanup and must return a single valid JSON object with no extra text.
 The goal is zero inbox for all processed messages.
-Use only one of these Gmail labels: Important or Unimportant.
-Choose Important for messages a person is likely to truly care about later, such as personal correspondence, mission updates from real people, work items, finance, bills, legal, health, travel, deadlines, or anything that may need follow-up.
-Choose Unimportant for noisy login alerts, promotions, newsletters, low-value notifications, routine automated mail, and anything that does not deserve attention later.
+Use only one of these Gmail labels: Jarvis Important or Jarvis Unimportant.
+Choose Jarvis Important for messages a person is likely to truly care about later, such as personal correspondence, mission updates from real people, work items, finance, bills, legal, health, travel, deadlines, or anything that may need follow-up.
+Choose Jarvis Unimportant for noisy login alerts, promotions, newsletters, low-value notifications, routine automated mail, and anything that does not deserve attention later.
 Every processed message must leave the inbox after labeling.
-Urgent or reply-needed messages should still be labeled Important, but they must also be archived.
+Urgent or reply-needed messages should still be labeled Jarvis Important, but they must also be archived.
 
 Use exactly these fields:
 - category: one of [action_required, meeting, reference, newsletter, promotion, receipt, spam]
@@ -199,7 +238,7 @@ Use exactly these fields:
 - label_name: short string
 - archive: boolean
 - reason: short explanation
-""".strip()
+""".strip() + _classification_guidance_prompt()
 
     user_prompt = f"""
 Current labels on this email:
@@ -271,14 +310,14 @@ def classify_new_email_ai_fallback(email: EmailSummary) -> CleanupDecision:
     system_prompt = """
 You are classifying a new email only when hard-coded rules were inconclusive.
 Return a single valid JSON object with no extra text.
-Choose only one of these labels: Important or Unimportant.
-Choose Important for mail that is likely worth revisiting later or that may represent a real personal, work, financial, legal, travel, health, or follow-up matter.
-Choose Unimportant for routine notifications, low-value automated mail, promotions, newsletters, login/security alerts, shopping updates, and general inbox noise.
+Choose only one of these labels: Jarvis Important or Jarvis Unimportant.
+Choose Jarvis Important for mail that is likely worth revisiting later or that may represent a real personal, work, financial, legal, travel, health, or follow-up matter.
+Choose Jarvis Unimportant for routine notifications, low-value automated mail, promotions, newsletters, login/security alerts, shopping updates, and general inbox noise.
 
 Use exactly these fields:
-- label_name: one of [Important, Unimportant]
+- label_name: one of [Jarvis Important, Jarvis Unimportant]
 - reason: short explanation
-""".strip()
+""".strip() + _classification_guidance_prompt()
 
     user_prompt = f"""
 Email:

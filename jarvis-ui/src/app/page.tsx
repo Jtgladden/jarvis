@@ -4,12 +4,16 @@ import React, { useEffect, useEffectEvent, useMemo, useState } from "react";
 import {
   AlertCircle,
   Archive,
+  CalendarDays,
+  ChevronDown,
+  ChevronRight,
   Inbox,
   Mail,
   Plus,
   RefreshCw,
   Search,
   ShieldCheck,
+  Sparkles,
   Tag,
   Trash2,
 } from "lucide-react";
@@ -20,9 +24,23 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
-const IMPORTANT_LABEL = "Important";
-const LEGACY_IMPORTANT_LABELS = new Set(["AI Important", "Rules Important"]);
+const IMPORTANT_LABEL = "Jarvis Important";
+const UNIMPORTANT_LABEL = "Jarvis Unimportant";
+const LEGACY_IMPORTANT_LABELS = new Set(["Important", "AI Important", "Rules Important"]);
+const LEGACY_UNIMPORTANT_LABELS = new Set([
+  "Unimportant",
+  "AI Unimportant",
+  "Rules Unimportant",
+  "Rules Security",
+  "Rules Shopping",
+]);
 const ALL_MAILBOX = "ALL";
+const DEFAULT_VISIBLE_MAILBOXES = new Set([
+  "INBOX",
+  IMPORTANT_LABEL,
+  UNIMPORTANT_LABEL,
+  "Reviewed",
+]);
 
 type Classification = {
   category?: string;
@@ -30,6 +48,18 @@ type Classification = {
   needs_reply?: boolean;
   urgency?: string;
   suggested_action?: string;
+  short_summary?: string;
+  why_it_matters?: string;
+  action_items?: string[];
+  deadline_hint?: string | null;
+  suggested_reply?: string | null;
+  calendar_relevant?: boolean;
+  calendar_title?: string | null;
+  calendar_start?: string | null;
+  calendar_end?: string | null;
+  calendar_is_all_day?: boolean;
+  calendar_location?: string | null;
+  calendar_notes?: string | null;
   reason?: string;
 };
 
@@ -57,6 +87,170 @@ type EmailPageResponse = {
   items: Email[];
   next_page_token?: string | null;
 };
+
+type ClassificationOverview = {
+  mailbox: string;
+  total_cached: number;
+  needs_reply: number;
+  action_item_count: number;
+  deadlines_found: number;
+  categories: Record<string, number>;
+  urgency: Record<string, number>;
+  top_senders: Array<{
+    sender: string;
+    count: number;
+  }>;
+  top_action_items: Array<{
+    message_id: string;
+    subject: string;
+    sender: string;
+    text: string;
+    count: number;
+  }>;
+  deadline_highlights: Array<{
+    message_id: string;
+    subject: string;
+    sender: string;
+    text: string;
+    count: number;
+  }>;
+};
+
+type ClassificationGuidance = {
+  text: string;
+  updated_at?: string | null;
+  version: string;
+};
+
+function normalizeOverview(data: Partial<ClassificationOverview>): ClassificationOverview {
+  const legacyDeadlineExamples = (data as Partial<{ deadline_examples: ClassificationOverview["deadline_highlights"] }>).deadline_examples;
+  return {
+    mailbox: data.mailbox || "INBOX",
+    total_cached: data.total_cached || 0,
+    needs_reply: data.needs_reply || 0,
+    action_item_count: data.action_item_count || 0,
+    deadlines_found: data.deadlines_found || 0,
+    categories: data.categories || {},
+    urgency: data.urgency || {},
+    top_senders: data.top_senders || [],
+    top_action_items: data.top_action_items || [],
+    deadline_highlights: data.deadline_highlights || legacyDeadlineExamples || [],
+  };
+}
+
+function parseCalendarDate(value: string | null | undefined) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
+function formatScheduleDayLabel(value: string) {
+  const parsed = parseCalendarDate(value);
+  if (!parsed) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(parsed);
+}
+
+function formatScheduleDateTime(value: string | null | undefined, isAllDay = false) {
+  if (!value) return "Not scheduled";
+  const parsed = parseCalendarDate(value);
+  if (!parsed) return value;
+
+  if (isAllDay) {
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    }).format(parsed);
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function formatScheduleTimeRange(item: {
+  start: string;
+  end?: string | null;
+  is_all_day?: boolean;
+}) {
+  if (item.is_all_day) {
+    return "All day";
+  }
+
+  const start = parseCalendarDate(item.start);
+  if (!start) return item.start;
+
+  const end = parseCalendarDate(item.end);
+  const timeFormatter = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const startLabel = timeFormatter.format(start);
+
+  if (!end) {
+    return startLabel;
+  }
+
+  return `${startLabel} - ${timeFormatter.format(end)}`;
+}
+
+function buildAgendaDayGroups(items: CalendarAgendaItem[]): AgendaDayGroup[] {
+  const groups = new Map<string, AgendaDayGroup>();
+
+  for (const item of items) {
+    const parsed = parseCalendarDate(item.start);
+    const key = parsed ? parsed.toISOString().slice(0, 10) : item.start;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.items.push(item);
+      continue;
+    }
+
+    groups.set(key, {
+      key,
+      label: formatScheduleDayLabel(item.start),
+      items: [item],
+    });
+  }
+
+  return Array.from(groups.values());
+}
+
+function buildPlanningDayGroups(items: PlanningItem[]): Array<{
+  key: string;
+  label: string;
+  items: PlanningItem[];
+}> {
+  const groups = new Map<string, { key: string; label: string; items: PlanningItem[] }>();
+
+  for (const item of items) {
+    const parsed = parseCalendarDate(item.start);
+    const key = parsed ? parsed.toISOString().slice(0, 10) : item.day_label;
+    const label = parsed ? formatScheduleDayLabel(item.start) : item.day_label;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.items.push(item);
+      continue;
+    }
+
+    groups.set(key, {
+      key,
+      label,
+      items: [item],
+    });
+  }
+
+  return Array.from(groups.values());
+}
 
 type GmailLabel = {
   id: string;
@@ -101,6 +295,99 @@ type CleanupJobStatus = {
 
 type EmailUpdateResponse = {
   email: Email;
+};
+
+type ClassifiedEmailResponse = {
+  email: Email;
+  classification: Classification;
+};
+
+type CalendarPreview = {
+  message_id: string;
+  thread_id: string;
+  relevant: boolean;
+  title?: string | null;
+  start?: string | null;
+  end?: string | null;
+  is_all_day: boolean;
+  location?: string | null;
+  notes?: string | null;
+  reason?: string | null;
+};
+
+type CalendarCreateResponse = {
+  created: boolean;
+  event_id?: string | null;
+  html_link?: string | null;
+  preview: CalendarPreview;
+};
+
+type CalendarAgendaItem = {
+  event_id: string;
+  title: string;
+  start: string;
+  end?: string | null;
+  is_all_day: boolean;
+  location?: string | null;
+  description?: string | null;
+  html_link?: string | null;
+};
+
+type CalendarAgenda = {
+  calendar_id: string;
+  time_min: string;
+  time_max: string;
+  items: CalendarAgendaItem[];
+};
+
+type AgendaDayGroup = {
+  key: string;
+  label: string;
+  items: CalendarAgendaItem[];
+};
+
+type PlanningItem = {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  day_label: string;
+  priority: "high" | "medium" | "low";
+  kind: "focus" | "meeting_prep" | "admin" | "personal" | "buffer";
+  rationale: string;
+};
+
+type PlanningResponse = {
+  summary: string;
+  strategy: string;
+  priorities: string[];
+  items: PlanningItem[];
+};
+
+type PlanningJobStartResponse = {
+  job_id: string;
+  status: "queued" | "running";
+};
+
+type PlanningJobStatus = {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  goals: string;
+  days: number;
+  result?: PlanningResponse | null;
+  error?: string | null;
+};
+
+type PlanningCalendarCreateResponse = {
+  created: boolean;
+  event_id?: string | null;
+  html_link?: string | null;
+  item: PlanningItem;
+};
+
+type PlanningCalendarBulkCreateResponse = {
+  created_count: number;
+  items: PlanningCalendarCreateResponse[];
 };
 
 const categoryTone: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
@@ -159,6 +446,12 @@ function hasImportantLabel(labels: string[] | undefined) {
   );
 }
 
+function hasUnimportantLabel(labels: string[] | undefined) {
+  return (labels || []).some(
+    (label) => label === UNIMPORTANT_LABEL || LEGACY_UNIMPORTANT_LABELS.has(label)
+  );
+}
+
 function emailHasLabel(email: Email | null, labelName: string) {
   return (email?.labels || []).includes(labelName);
 }
@@ -166,6 +459,17 @@ function emailHasLabel(email: Email | null, labelName: string) {
 function emailMatchesMailbox(email: Email, mailbox: string) {
   if (mailbox === ALL_MAILBOX) return true;
   return (email.labels || []).includes(mailbox);
+}
+
+function isByuEmail(email: Email | null) {
+  if (!email) return false;
+
+  const haystack = [email.sender, email.subject, email.snippet, email.body]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return haystack.includes("@byu.edu");
 }
 
 function groupEmailsByThread(emails: Email[]) {
@@ -208,20 +512,23 @@ function EmailListItem({
 }) {
   const classification = email.classification || {};
   const cleanupDecision = email.cleanupDecision;
+  const byuEmail = isByuEmail(email);
 
   return (
     <button
       onClick={onClick}
-      className={`w-full rounded-2xl border p-4 text-left transition hover:shadow-sm ${
-        selected ? "border-black bg-zinc-50" : "border-zinc-200 bg-white"
+      className={`w-full rounded-[1.6rem] border p-4 text-left transition duration-200 ${
+        selected
+          ? "border-fuchsia-400/70 bg-[linear-gradient(135deg,rgba(189,147,249,0.24),rgba(40,42,54,0.98))] shadow-[0_18px_50px_rgba(15,16,33,0.48)]"
+          : "border-white/8 bg-[rgba(24,26,42,0.82)] hover:border-cyan-300/30 hover:bg-[rgba(32,35,57,0.95)] hover:shadow-[0_12px_32px_rgba(0,0,0,0.28)]"
       }`}
     >
       <div className="mb-2 flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold text-zinc-900">
+          <div className="truncate text-sm font-semibold text-slate-100">
             {decodeHtmlEntities(email.subject) || "(No subject)"}
           </div>
-          <div className="truncate text-xs text-zinc-500">
+          <div className="truncate text-xs text-slate-400">
             {decodeHtmlEntities(email.sender) || "Unknown sender"}
           </div>
         </div>
@@ -233,11 +540,17 @@ function EmailListItem({
         ) : null}
       </div>
 
-      <p className="mb-3 line-clamp-2 text-sm text-zinc-600">
+      <p className="mb-3 line-clamp-2 text-sm text-slate-300">
         {decodeHtmlEntities(email.snippet) || "No preview available."}
       </p>
 
       <div className="flex flex-wrap gap-2">
+        {byuEmail ? (
+          <Badge className="rounded-xl bg-sky-500/20 text-sky-100 hover:bg-sky-500/20">
+            BYU mail
+          </Badge>
+        ) : null}
+
         {classification.category ? (
           <Badge
             variant={categoryTone[classification.category] || "secondary"}
@@ -281,14 +594,41 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [mode, setMode] = useState<"classified" | "raw">("raw");
+  const [mode, setMode] = useState<"classified" | "raw" | "overview" | "schedule" | "planning">("classified");
+  const [classifiedBucket, setClassifiedBucket] = useState<"all" | "important" | "unimportant">(
+    "all"
+  );
+  const [overview, setOverview] = useState<ClassificationOverview | null>(null);
+  const [agenda, setAgenda] = useState<CalendarAgenda | null>(null);
+  const [scheduleDays, setScheduleDays] = useState("7");
   const [selectedMailbox, setSelectedMailbox] = useState<string>("INBOX");
+  const [extraVisibleMailboxes, setExtraVisibleMailboxes] = useState<string[]>([]);
   const [inboxLimit, setInboxLimit] = useState("");
   const [cleanupSummary, setCleanupSummary] = useState<CleanupSummary | null>(null);
   const [cleanupLimit, setCleanupLimit] = useState("");
   const [cleanupJob, setCleanupJob] = useState<CleanupJobStatus | null>(null);
+  const [cleanupExpanded, setCleanupExpanded] = useState(false);
+  const [calendarPreview, setCalendarPreview] = useState<CalendarPreview | null>(null);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarCreateLoading, setCalendarCreateLoading] = useState(false);
+  const [calendarCreateLink, setCalendarCreateLink] = useState<string | null>(null);
+  const [classificationGuidance, setClassificationGuidance] = useState("");
+  const [savedClassificationGuidance, setSavedClassificationGuidance] = useState("");
+  const [classificationGuidanceUpdatedAt, setClassificationGuidanceUpdatedAt] = useState<string | null>(null);
+  const [guidanceLoading, setGuidanceLoading] = useState(false);
+  const [guidanceSaving, setGuidanceSaving] = useState(false);
+  const [guidanceExpanded, setGuidanceExpanded] = useState(false);
   const [labelDraft, setLabelDraft] = useState<string[]>([]);
   const [newLabelName, setNewLabelName] = useState("");
+  const [planningPrompt, setPlanningPrompt] = useState("");
+  const [planningDays, setPlanningDays] = useState("7");
+  const [planningLoading, setPlanningLoading] = useState(false);
+  const [planningResult, setPlanningResult] = useState<PlanningResponse | null>(null);
+  const [planningJob, setPlanningJob] = useState<PlanningJobStatus | null>(null);
+  const [planningCalendarLoading, setPlanningCalendarLoading] = useState(false);
+  const [planningCalendarLink, setPlanningCalendarLink] = useState<string | null>(null);
+  const [planningBulkCalendarLoading, setPlanningBulkCalendarLoading] = useState(false);
+  const [planningBulkCalendarMessage, setPlanningBulkCalendarMessage] = useState("");
 
   const syncSelectedId = (nextEmails: Email[]) => {
     if (nextEmails.length > 0) {
@@ -322,10 +662,14 @@ export default function HomePage() {
   };
 
   const loadEmails = async (
-    currentMode: "classified" | "raw" = mode,
+    currentMode: "classified" | "raw" | "overview" | "schedule" | "planning" = mode,
     mailboxOverride?: string,
     pageTokenOverride?: string | null
   ) => {
+    if (currentMode === "planning") {
+      return;
+    }
+
     setLoading(true);
     setError("");
 
@@ -333,7 +677,12 @@ export default function HomePage() {
       const trimmed = inboxLimit.trim();
       const limit = trimmed ? Number(trimmed) : NaN;
       const params = new URLSearchParams();
-      if (currentMode === "raw") {
+      if (currentMode === "schedule") {
+        const days = Number(scheduleDays);
+        params.set("days", String(Number.isFinite(days) && days > 0 ? Math.floor(days) : 7));
+      } else if (currentMode === "overview") {
+        params.set("mailbox", mailboxOverride ?? selectedMailbox);
+      } else if (currentMode === "raw") {
         const pageSize =
           trimmed && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 50;
         params.set("limit", String(pageSize));
@@ -343,8 +692,20 @@ export default function HomePage() {
         }
       } else if (trimmed && Number.isFinite(limit) && limit > 0) {
         params.set("limit", String(Math.floor(limit)));
+        params.set("bucket", classifiedBucket);
+        params.set("mailbox", mailboxOverride ?? selectedMailbox);
+      } else if (currentMode === "classified") {
+        params.set("bucket", classifiedBucket);
+        params.set("mailbox", mailboxOverride ?? selectedMailbox);
       }
-      const endpoint = currentMode === "classified" ? "/classify" : "/emails";
+      const endpoint =
+        currentMode === "classified"
+          ? "/classify"
+          : currentMode === "overview"
+            ? "/overview"
+            : currentMode === "schedule"
+              ? "/calendar/schedule"
+            : "/emails";
       const queryString = params.toString() ? `?${params.toString()}` : "";
       const response = await fetch(`${API_BASE}${endpoint}${queryString}`);
       if (!response.ok) {
@@ -355,6 +716,27 @@ export default function HomePage() {
 
       const data = await response.json();
 
+      if (currentMode === "schedule") {
+        const nextAgenda = data as CalendarAgenda;
+        setAgenda(nextAgenda);
+        setOverview(null);
+        setEmails([]);
+        setCleanupSummary(null);
+        setCleanupJob(null);
+        setSelectedId(nextAgenda.items[0]?.event_id || null);
+        return;
+      }
+
+      if (currentMode === "overview") {
+        setOverview(normalizeOverview(data as Partial<ClassificationOverview>));
+        setAgenda(null);
+        setEmails([]);
+        setCleanupSummary(null);
+        setCleanupJob(null);
+        setSelectedId(null);
+        return;
+      }
+
       const normalized: Email[] =
         currentMode === "classified"
           ? data.map((item: { email: Email; classification: Classification }) => ({
@@ -363,6 +745,8 @@ export default function HomePage() {
             }))
           : (data as EmailPageResponse).items;
 
+      setOverview(null);
+      setAgenda(null);
       setEmails(normalized);
       if (currentMode === "raw") {
         setRawPageToken(pageTokenOverride ?? null);
@@ -384,7 +768,10 @@ export default function HomePage() {
   };
 
   const fetchEmailsEffect = useEffectEvent(
-    (currentMode: "classified" | "raw", mailboxName?: string) => {
+    (currentMode: "classified" | "raw" | "overview" | "schedule" | "planning", mailboxName?: string) => {
+      if (currentMode === "planning") {
+        return;
+      }
       void loadEmails(currentMode, mailboxName);
     }
   );
@@ -428,6 +815,15 @@ export default function HomePage() {
       const data: EmailUpdateResponse = await response.json();
       replaceOrRemoveEmail(data.email);
       await loadLabels();
+      if (mode === "classified") {
+        await loadEmails("classified");
+      }
+      if (mode === "overview") {
+        await loadEmails("overview");
+      }
+      if (mode === "schedule") {
+        await loadEmails("schedule");
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to update the email.";
       setError(message);
@@ -543,13 +939,292 @@ export default function HomePage() {
     }
   };
 
+  const loadCalendarPreview = async (messageId: string) => {
+    setCalendarLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/calendar/preview/${messageId}`);
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Calendar preview failed with status ${response.status}`)
+        );
+      }
+
+      const data: CalendarPreview = await response.json();
+      setCalendarPreview(data.relevant ? data : null);
+    } catch {
+      setCalendarPreview(null);
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
+
+  const createCalendarEvent = async () => {
+    if (!selectedEmail) return;
+
+    setCalendarCreateLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/calendar/create/${selectedEmail.id}`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Calendar create failed with status ${response.status}`)
+        );
+      }
+
+      const data: CalendarCreateResponse = await response.json();
+      setCalendarPreview(data.preview.relevant ? data.preview : null);
+      setCalendarCreateLink(data.html_link || null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to create calendar event.";
+      setError(message);
+    } finally {
+      setCalendarCreateLoading(false);
+    }
+  };
+
+  const generatePlan = async () => {
+    setPlanningLoading(true);
+    setError("");
+    setPlanningCalendarLink(null);
+    setPlanningBulkCalendarMessage("");
+    setPlanningResult(null);
+
+    try {
+      const days = Number(planningDays);
+      const requestBody = JSON.stringify({
+        goals: planningPrompt,
+        days: Number.isFinite(days) && days > 0 ? Math.floor(days) : 7,
+      });
+
+      let response: Response | null = null;
+      let lastError: unknown = null;
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          response = await fetch(`${API_BASE}/planning/plan`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: requestBody,
+          });
+          lastError = null;
+          break;
+        } catch (err) {
+          lastError = err;
+          if (attempt === 0) {
+            await new Promise((resolve) => window.setTimeout(resolve, 400));
+          }
+        }
+      }
+
+      if (!response) {
+        throw lastError instanceof Error
+          ? lastError
+          : new Error("Planning request could not reach the backend.");
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Planning request failed with status ${response.status}`)
+        );
+      }
+
+      const data: PlanningJobStartResponse = await response.json();
+      setPlanningJob({
+        job_id: data.job_id,
+        status: data.status,
+        goals: planningPrompt,
+        days: Number.isFinite(days) && days > 0 ? Math.floor(days) : 7,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to generate plan.";
+      setError(message);
+      setPlanningLoading(false);
+    }
+  };
+
+  const createPlanningCalendarEvent = async () => {
+    if (!selectedPlanningItem) return;
+
+    setPlanningCalendarLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE}/planning/calendar`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ item: selectedPlanningItem }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(
+            response,
+            `Planning calendar create failed with status ${response.status}`
+          )
+        );
+      }
+
+      const data: PlanningCalendarCreateResponse = await response.json();
+      setPlanningCalendarLink(data.html_link || null);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to add the planning block to Calendar.";
+      setError(message);
+    } finally {
+      setPlanningCalendarLoading(false);
+    }
+  };
+
+  const createPlanningCalendarEvents = async (items: PlanningItem[], successLabel: string) => {
+    if (items.length === 0) return;
+
+    setPlanningBulkCalendarLoading(true);
+    setPlanningBulkCalendarMessage("");
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE}/planning/calendar/bulk`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ items }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(
+            response,
+            `Planning calendar bulk create failed with status ${response.status}`
+          )
+        );
+      }
+
+      const data: PlanningCalendarBulkCreateResponse = await response.json();
+      setPlanningBulkCalendarMessage(
+        `${successLabel}: added ${data.created_count} of ${items.length} block${items.length === 1 ? "" : "s"} to Google Calendar.`
+      );
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to add planning blocks to Calendar.";
+      setError(message);
+    } finally {
+      setPlanningBulkCalendarLoading(false);
+    }
+  };
+
+  const openOverviewEmail = async (messageId: string) => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE}/emails/${messageId}/classified`);
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Email lookup failed with status ${response.status}`)
+        );
+      }
+
+      const data: ClassifiedEmailResponse = await response.json();
+      const email: Email = {
+        ...data.email,
+        classification: data.classification,
+      };
+
+      setMode("classified");
+      setOverview(null);
+      setAgenda(null);
+      setCleanupSummary(null);
+      setCleanupJob(null);
+      setEmails([email]);
+      setSelectedId(email.id);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to open the selected email.";
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadClassificationGuidance = async () => {
+    setGuidanceLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/classification-guidance`);
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(
+            response,
+            `Classification guidance failed with status ${response.status}`
+          )
+        );
+      }
+
+      const data: ClassificationGuidance = await response.json();
+      setClassificationGuidance(data.text || "");
+      setSavedClassificationGuidance(data.text || "");
+      setClassificationGuidanceUpdatedAt(data.updated_at || null);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to load classification guidance.";
+      setError(message);
+    } finally {
+      setGuidanceLoading(false);
+    }
+  };
+
+  const saveClassificationGuidance = async () => {
+    setGuidanceSaving(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE}/classification-guidance`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: classificationGuidance }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(
+            response,
+            `Classification guidance save failed with status ${response.status}`
+          )
+        );
+      }
+
+      const data: ClassificationGuidance = await response.json();
+      setClassificationGuidance(data.text || "");
+      setSavedClassificationGuidance(data.text || "");
+      setClassificationGuidanceUpdatedAt(data.updated_at || null);
+
+      if (mode === "classified") {
+        await loadEmails("classified", selectedMailbox);
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to save classification guidance.";
+      setError(message);
+    } finally {
+      setGuidanceSaving(false);
+    }
+  };
+
   useEffect(() => {
     void loadLabels();
+    void loadClassificationGuidance();
   }, []);
 
   useEffect(() => {
     fetchEmailsEffect(mode, selectedMailbox);
-  }, [mode, selectedMailbox]);
+  }, [mode, selectedMailbox, classifiedBucket, scheduleDays]);
 
   useEffect(() => {
     if (mode !== "raw") return;
@@ -602,6 +1277,46 @@ export default function HomePage() {
     return () => window.clearInterval(poll);
   }, [cleanupJob]);
 
+  useEffect(() => {
+    if (!planningJob || (planningJob.status !== "queued" && planningJob.status !== "running")) {
+      return;
+    }
+
+    const poll = window.setInterval(async () => {
+      try {
+        const response = await fetch(`${API_BASE}/planning/jobs/${planningJob.job_id}`);
+        if (!response.ok) {
+          throw new Error(
+            await getErrorMessage(
+              response,
+              `Planning status failed with status ${response.status}`
+            )
+          );
+        }
+
+        const data: PlanningJobStatus = await response.json();
+        setPlanningJob(data);
+
+        if (data.status === "completed" && data.result) {
+          setPlanningResult(data.result);
+          setSelectedId(data.result.items[0]?.id || null);
+          setPlanningLoading(false);
+        }
+
+        if (data.status === "failed") {
+          setError(data.error || "Planning failed.");
+          setPlanningLoading(false);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to fetch planning status.";
+        setError(message);
+        setPlanningLoading(false);
+      }
+    }, 1200);
+
+    return () => window.clearInterval(poll);
+  }, [planningJob]);
+
   const filteredEmails = useMemo(() => {
     const q = safeLower(query.trim());
     if (!q) return emails;
@@ -639,7 +1354,13 @@ export default function HomePage() {
     displayEmails.find((email) => email.id === selectedId) ||
     displayEmails[0] ||
     null;
-  const canMarkHandled = mode === "classified" && hasImportantLabel(selectedEmail?.labels);
+  const canMarkHandled =
+    !!selectedEmail &&
+    mode !== "overview" &&
+    mode !== "schedule" &&
+    !emailHasLabel(selectedEmail, "Reviewed");
+  const canMarkImportant = !!selectedEmail && !hasImportantLabel(selectedEmail.labels);
+  const canMarkUnimportant = !!selectedEmail && !hasUnimportantLabel(selectedEmail.labels);
   const isUnread = emailHasLabel(selectedEmail, "UNREAD");
   const isInInbox = emailHasLabel(selectedEmail, "INBOX");
 
@@ -655,6 +1376,26 @@ export default function HomePage() {
       ...labels.filter((label) => label.name !== "CHAT"),
     ],
     [labels]
+  );
+  const visibleMailboxLabels = useMemo(
+    () =>
+      mailboxLabels.filter(
+        (label) =>
+          DEFAULT_VISIBLE_MAILBOXES.has(label.name) ||
+          extraVisibleMailboxes.includes(label.name) ||
+          label.name === selectedMailbox
+      ),
+    [extraVisibleMailboxes, mailboxLabels, selectedMailbox]
+  );
+  const hiddenMailboxLabels = useMemo(
+    () =>
+      mailboxLabels.filter(
+        (label) =>
+          !DEFAULT_VISIBLE_MAILBOXES.has(label.name) &&
+          !extraVisibleMailboxes.includes(label.name) &&
+          label.name !== selectedMailbox
+      ),
+    [extraVisibleMailboxes, mailboxLabels, selectedMailbox]
   );
   const editableLabels = useMemo(
     () => labels.filter((label) => isEditableLabel(label)).sort((a, b) => a.name.localeCompare(b.name)),
@@ -673,10 +1414,53 @@ export default function HomePage() {
     );
   }, [selectedEmail?.id, editableLabelNames.join("|")]);
 
+  useEffect(() => {
+    setCalendarCreateLink(null);
+    if (!selectedEmail || mode === "overview") {
+      setCalendarPreview(null);
+      return;
+    }
+
+    void loadCalendarPreview(selectedEmail.id);
+  }, [selectedEmail?.id, mode]);
+
+  useEffect(() => {
+    setPlanningCalendarLink(null);
+  }, [selectedId, planningResult]);
+
+  useEffect(() => {
+    setPlanningBulkCalendarMessage("");
+  }, [planningResult]);
+
   const selectedMailboxLabel =
     mailboxLabels.find((label) => label.name === selectedMailbox) ||
-    mailboxLabels.find((label) => label.name === ALL_MAILBOX) ||
+    visibleMailboxLabels.find((label) => label.name === "INBOX") ||
     null;
+  const agendaDayGroups = useMemo(
+    () => buildAgendaDayGroups(agenda?.items || []),
+    [agenda?.items]
+  );
+  const selectedAgendaEvent =
+    agenda?.items.find((item) => item.event_id === selectedId) || agenda?.items[0] || null;
+  const planningDayGroups = useMemo(
+    () => buildPlanningDayGroups(planningResult?.items || []),
+    [planningResult?.items]
+  );
+  const selectedPlanningItem =
+    planningResult?.items.find((item) => item.id === selectedId) || planningResult?.items[0] || null;
+  const selectedPlanningDayItems = useMemo(
+    () =>
+      selectedPlanningItem
+        ? (planningResult?.items || []).filter(
+            (item) => item.day_label === selectedPlanningItem.day_label
+          )
+        : [],
+    [planningResult?.items, selectedPlanningItem]
+  );
+  const highPriorityPlanningItems = useMemo(
+    () => (planningResult?.items || []).filter((item) => item.priority === "high"),
+    [planningResult?.items]
+  );
 
   const cleanupProgressPercent =
     cleanupJob && cleanupJob.total > 0
@@ -684,16 +1468,38 @@ export default function HomePage() {
       : 0;
   const rawHasPreviousPage = rawPageHistory.length > 0;
   const selectedThreadCount = selectedEmail ? threadCountByEmailId.get(selectedEmail.id) ?? 1 : 1;
+  const guidanceDirty = classificationGuidance !== savedClassificationGuidance;
+
+  const correctClassification = async (targetLabel: "important" | "unimportant") => {
+    if (!selectedEmail) return;
+
+    const addLabelName = targetLabel === "important" ? IMPORTANT_LABEL : UNIMPORTANT_LABEL;
+    const removeLabelNames =
+      targetLabel === "important"
+        ? [UNIMPORTANT_LABEL, ...LEGACY_UNIMPORTANT_LABELS]
+        : [IMPORTANT_LABEL, ...LEGACY_IMPORTANT_LABELS];
+
+    await updateSelectedEmail({
+      add_label_names: [addLabelName],
+      remove_label_names: removeLabelNames,
+    });
+  };
 
   return (
-    <div className="min-h-screen bg-zinc-100 p-6 text-zinc-900">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="min-h-screen p-4 text-slate-100 md:p-6">
+      <div className="mx-auto max-w-[1500px] space-y-6">
+        <div className="relative overflow-hidden rounded-[2rem] border border-white/8 bg-[linear-gradient(135deg,rgba(34,36,58,0.94),rgba(17,19,34,0.92))] px-6 py-6 shadow-[0_24px_80px_rgba(6,7,14,0.48)] backdrop-blur-xl">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(189,147,249,0.2),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(139,233,253,0.16),transparent_30%)]" />
+          <div className="relative flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Jarvis Mail Dashboard</h1>
-            <p className="text-sm text-zinc-600">
-              Browse Gmail folders in the raw view, relabel mail, and still use the classified
-              review workflow for Important mail.
+            <div className="mb-3 inline-flex items-center rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.24em] text-fuchsia-200">
+              Dracula Control Center
+            </div>
+            <h1 className="text-3xl font-bold tracking-tight text-white md:text-4xl">Jarvis Mail Dashboard</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
+              {mode === "planning"
+                ? "Turn your goals for the day or week into a realistic schedule that fits around your calendar."
+                : "Browse Gmail folders in the raw view, relabel mail, and still use the classified review workflow for Important mail."}
             </p>
           </div>
 
@@ -717,6 +1523,33 @@ export default function HomePage() {
             </Button>
 
             <Button
+              variant={mode === "overview" ? "default" : "outline"}
+              className="rounded-2xl"
+              onClick={() => setMode("overview")}
+            >
+              <ShieldCheck className="mr-2 h-4 w-4" />
+              Overview
+            </Button>
+
+            <Button
+              variant={mode === "schedule" ? "default" : "outline"}
+              className="rounded-2xl"
+              onClick={() => setMode("schedule")}
+            >
+              <CalendarDays className="mr-2 h-4 w-4" />
+              Schedule
+            </Button>
+
+            <Button
+              variant={mode === "planning" ? "default" : "outline"}
+              className="rounded-2xl"
+              onClick={() => setMode("planning")}
+            >
+              <Sparkles className="mr-2 h-4 w-4" />
+              Planning
+            </Button>
+
+            <Button
               className="rounded-2xl"
               variant="outline"
               onClick={() => {
@@ -724,221 +1557,575 @@ export default function HomePage() {
                 setRawNextPageToken(null);
                 setRawPageHistory([]);
                 void loadLabels();
+                if (mode === "planning") {
+                  if (planningPrompt.trim()) {
+                    void generatePlan();
+                  }
+                  return;
+                }
                 void loadEmails(mode, selectedMailbox);
               }}
-              disabled={loading || cleanupLoading || emailActionLoading}
+              disabled={loading || cleanupLoading || emailActionLoading || planningLoading}
             >
               <RefreshCw
-                className={`mr-2 h-4 w-4 ${loading || labelsLoading ? "animate-spin" : ""}`}
+                className={`mr-2 h-4 w-4 ${loading || labelsLoading || planningLoading ? "animate-spin" : ""}`}
               />
               Refresh
             </Button>
 
-            <Input
-              type="number"
-              min="1"
-              value={inboxLimit}
-              onChange={(e) => setInboxLimit(e.target.value)}
-              className="w-full rounded-2xl sm:w-36"
-              placeholder={mode === "raw" ? "Page size" : "Summary cap"}
-            />
+            {mode !== "planning" ? (
+              <Input
+                type="number"
+                min="1"
+                value={inboxLimit}
+                onChange={(e) => setInboxLimit(e.target.value)}
+                className="w-full rounded-2xl sm:w-36"
+                placeholder={mode === "raw" ? "Page size" : "Summary cap"}
+              />
+            ) : null}
           </div>
         </div>
+        </div>
 
-        <Card className="rounded-3xl border-none shadow-sm">
-          <CardHeader className="gap-3">
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <ShieldCheck className="h-5 w-5" />
-              Inbox cleanup
-            </CardTitle>
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <p className="max-w-2xl text-sm text-zinc-600">
-                Clean up the whole inbox with one click. Every processed
-                message is labeled as Important or Unimportant and then archived
-                so the inbox can reach zero. This version never deletes messages.
-              </p>
-              <div className="flex w-full flex-col gap-2 sm:flex-row md:w-auto">
-                <Input
-                  type="number"
-                  min="1"
-                  value={cleanupLimit}
-                  onChange={(e) => setCleanupLimit(e.target.value)}
-                  className="w-full rounded-2xl sm:w-32"
-                  placeholder="All mail"
-                />
-                <Button
-                  className="rounded-2xl"
-                  onClick={() => void runCleanup()}
-                  disabled={loading || cleanupLoading}
-                >
-                  <Archive className="mr-2 h-4 w-4" />
-                  {cleanupLoading ? "Working..." : "Clean inbox"}
-                </Button>
+        <Card className="rounded-[2rem] border border-white/8 bg-[rgba(20,22,37,0.72)] shadow-[0_18px_54px_rgba(6,7,14,0.28)] backdrop-blur-xl">
+          <CardHeader>
+            <button
+              type="button"
+              onClick={() => setCleanupExpanded((current) => !current)}
+              className="flex w-full items-start justify-between gap-3 text-left"
+            >
+              <div>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <ShieldCheck className="h-5 w-5" />
+                  Utilities
+                </CardTitle>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
+                  Rarely used maintenance tools like full inbox cleanup live here.
+                </p>
               </div>
-            </div>
+              <div className="flex items-center gap-2 text-slate-400">
+                {cleanupJob && (cleanupJob.status === "queued" || cleanupJob.status === "running") ? (
+                  <Badge variant="secondary" className="rounded-xl">
+                    Cleanup running
+                  </Badge>
+                ) : null}
+                {cleanupExpanded ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </div>
+            </button>
           </CardHeader>
 
-          {cleanupJob ? (
+          {cleanupExpanded ? (
             <CardContent className="space-y-4">
-              <div className="rounded-2xl bg-zinc-50 p-4">
-                <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <Badge
-                    variant={
-                      cleanupJob.status === "completed"
-                        ? "default"
-                        : cleanupJob.status === "failed"
-                          ? "destructive"
-                          : "secondary"
-                    }
-                    className="rounded-xl"
-                  >
-                    {cleanupJob.status}
-                  </Badge>
-                  <Badge variant="outline" className="rounded-xl">
-                    Cleanup job
-                  </Badge>
-                  <Badge variant="outline" className="rounded-xl">
-                    {cleanupJob.processed}/{cleanupJob.total || "?"} processed
-                  </Badge>
-                </div>
-
-                <div className="h-2 overflow-hidden rounded-full bg-zinc-200">
-                  <div
-                    className="h-full rounded-full bg-zinc-900 transition-all"
-                    style={{ width: `${cleanupProgressPercent}%` }}
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <p className="max-w-2xl text-sm leading-6 text-slate-300">
+                  Clean up the whole inbox with one click. Every processed message is labeled as Jarvis Important or Jarvis Unimportant and then archived so the inbox can reach zero. This version never deletes messages.
+                </p>
+                <div className="flex w-full flex-col gap-2 sm:flex-row md:w-auto">
+                  <Input
+                    type="number"
+                    min="1"
+                    value={cleanupLimit}
+                    onChange={(e) => setCleanupLimit(e.target.value)}
+                    className="w-full rounded-2xl sm:w-32"
+                    placeholder="All mail"
                   />
-                </div>
-
-                <div className="mt-3 flex flex-col gap-1 text-sm text-zinc-600">
-                  <div>
-                    {cleanupJob.status === "completed"
-                      ? "Cleanup finished."
-                      : cleanupJob.status === "failed"
-                        ? cleanupJob.error || "Cleanup failed."
-                        : "Cleanup is running."}
-                  </div>
-                  {cleanupJob.current_subject ? (
-                    <div className="truncate">Current email: {cleanupJob.current_subject}</div>
-                  ) : null}
+                  <Button
+                    className="rounded-2xl"
+                    onClick={() => void runCleanup()}
+                    disabled={loading || cleanupLoading}
+                  >
+                    <Archive className="mr-2 h-4 w-4" />
+                    {cleanupLoading ? "Working..." : "Clean inbox"}
+                  </Button>
                 </div>
               </div>
 
-              {cleanupSummary ? (
+              {cleanupJob ? (
                 <>
-                  <div className="grid gap-3 md:grid-cols-4">
-                    <Card className="rounded-2xl shadow-none">
-                      <CardContent className="p-4">
-                        <div className="text-xs uppercase tracking-wide text-zinc-500">
-                          Processed
-                        </div>
-                        <div className="mt-1 text-2xl font-semibold">
-                          {cleanupSummary.total_processed}
-                        </div>
-                      </CardContent>
-                    </Card>
-                    <Card className="rounded-2xl shadow-none">
-                      <CardContent className="p-4">
-                        <div className="text-xs uppercase tracking-wide text-zinc-500">
-                          Archived
-                        </div>
-                        <div className="mt-1 text-2xl font-semibold">
-                          {cleanupSummary.archived}
-                        </div>
-                      </CardContent>
-                    </Card>
-                    <Card className="rounded-2xl shadow-none">
-                      <CardContent className="p-4">
-                        <div className="text-xs uppercase tracking-wide text-zinc-500">
-                          Labeled only
-                        </div>
-                        <div className="mt-1 text-2xl font-semibold">
-                          {cleanupSummary.labeled_only}
-                        </div>
-                      </CardContent>
-                    </Card>
-                    <Card className="rounded-2xl shadow-none">
-                      <CardContent className="p-4">
-                        <div className="text-xs uppercase tracking-wide text-zinc-500">Kept</div>
-                        <div className="mt-1 text-2xl font-semibold">{cleanupSummary.kept}</div>
-                      </CardContent>
-                    </Card>
+                  <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <Badge
+                        variant={
+                          cleanupJob.status === "completed"
+                            ? "default"
+                            : cleanupJob.status === "failed"
+                              ? "destructive"
+                              : "secondary"
+                        }
+                        className="rounded-xl"
+                      >
+                        {cleanupJob.status}
+                      </Badge>
+                      <Badge variant="outline" className="rounded-xl">
+                        Cleanup job
+                      </Badge>
+                      <Badge variant="outline" className="rounded-xl">
+                        {cleanupJob.processed}/{cleanupJob.total || "?"} processed
+                      </Badge>
+                    </div>
+
+                    <div className="h-2 overflow-hidden rounded-full bg-white/8">
+                      <div
+                        className="h-full rounded-full bg-[linear-gradient(90deg,#bd93f9,#8be9fd)] transition-all"
+                        style={{ width: `${cleanupProgressPercent}%` }}
+                      />
+                    </div>
+
+                    <div className="mt-3 flex flex-col gap-1 text-sm text-slate-300">
+                      <div>
+                        {cleanupJob.status === "completed"
+                          ? "Cleanup finished."
+                          : cleanupJob.status === "failed"
+                            ? cleanupJob.error || "Cleanup failed."
+                            : "Cleanup is running."}
+                      </div>
+                      {cleanupJob.current_subject ? (
+                        <div className="truncate">Current email: {cleanupJob.current_subject}</div>
+                      ) : null}
+                    </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant="default" className="rounded-xl">
-                      Changes applied
-                    </Badge>
-                    <Badge variant="outline" className="rounded-xl">
-                      Safe mode: archive and label only
-                    </Badge>
-                    <Badge variant="outline" className="rounded-xl">
-                      Cleanup uses only Important and Unimportant
-                    </Badge>
-                  </div>
+
+                  {cleanupSummary ? (
+                    <>
+                      <div className="grid gap-3 md:grid-cols-4">
+                        <Card className="rounded-2xl shadow-none">
+                          <CardContent className="p-4">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              Processed
+                            </div>
+                            <div className="mt-1 text-2xl font-semibold">
+                              {cleanupSummary.total_processed}
+                            </div>
+                          </CardContent>
+                        </Card>
+                        <Card className="rounded-2xl shadow-none">
+                          <CardContent className="p-4">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              Archived
+                            </div>
+                            <div className="mt-1 text-2xl font-semibold">
+                              {cleanupSummary.archived}
+                            </div>
+                          </CardContent>
+                        </Card>
+                        <Card className="rounded-2xl shadow-none">
+                          <CardContent className="p-4">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              Labeled only
+                            </div>
+                            <div className="mt-1 text-2xl font-semibold">
+                              {cleanupSummary.labeled_only}
+                            </div>
+                          </CardContent>
+                        </Card>
+                        <Card className="rounded-2xl shadow-none">
+                          <CardContent className="p-4">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">Kept</div>
+                            <div className="mt-1 text-2xl font-semibold">{cleanupSummary.kept}</div>
+                          </CardContent>
+                        </Card>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant="default" className="rounded-xl">
+                          Changes applied
+                        </Badge>
+                        <Badge variant="outline" className="rounded-xl">
+                          Safe mode: archive and label only
+                        </Badge>
+                        <Badge variant="outline" className="rounded-xl">
+                          Cleanup uses only Jarvis Important and Jarvis Unimportant
+                        </Badge>
+                      </div>
+                    </>
+                  ) : null}
                 </>
               ) : null}
             </CardContent>
           ) : null}
         </Card>
 
+        {mode === "planning" ? (
+          <div className="grid gap-6 lg:grid-cols-[320px_360px_1fr]">
+            <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Sparkles className="h-5 w-5" />
+                  Planning brief
+                </CardTitle>
+                <p className="text-sm leading-6 text-slate-300">
+                  Describe what you want to get done, and Jarvis will draft a realistic schedule around your existing calendar.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <div className="text-xs uppercase tracking-wide text-slate-400">
+                    Goals and constraints
+                  </div>
+                  <textarea
+                    value={planningPrompt}
+                    onChange={(e) => setPlanningPrompt(e.target.value)}
+                    placeholder="Example: Finish the data structures assignment, prepare for Friday's interview, email my professor, grocery shop, and fit in gym time. I want my hardest work in the morning."
+                    className="min-h-[240px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <Input
+                    type="number"
+                    min="1"
+                    max="14"
+                    value={planningDays}
+                    onChange={(e) => setPlanningDays(e.target.value)}
+                    className="w-28 rounded-2xl"
+                    placeholder="Days"
+                  />
+                  <div className="text-xs text-slate-400">Planning horizon</div>
+                </div>
+                <Button
+                  className="w-full rounded-2xl"
+                  onClick={() => void generatePlan()}
+                  disabled={planningLoading}
+                >
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  {planningLoading ? "Generating plan..." : "Generate plan"}
+                </Button>
+                {planningJob && (planningJob.status === "queued" || planningJob.status === "running") ? (
+                  <div className="rounded-[1.2rem] border border-cyan-300/20 bg-cyan-300/10 px-4 py-3 text-sm text-cyan-100">
+                    Jarvis is building your plan in the background. This can take a little longer now so it can use a stronger model.
+                  </div>
+                ) : null}
+                {planningResult?.priorities?.length ? (
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase tracking-wide text-slate-400">
+                      Priority themes
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {planningResult.priorities.map((priority) => (
+                        <Badge key={priority} variant="outline" className="rounded-xl">
+                          {priority}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <CalendarDays className="h-5 w-5" />
+                  Suggested schedule
+                </CardTitle>
+                <p className="text-sm leading-6 text-slate-300">
+                  A day-by-day plan generated from your goals and current calendar commitments.
+                </p>
+              </CardHeader>
+              <CardContent>
+                {error ? (
+                  <div className="mb-4 flex items-start gap-3 rounded-[1.4rem] border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-200">
+                    <AlertCircle className="mt-0.5 h-4 w-4" />
+                    <div>{error}</div>
+                  </div>
+                ) : null}
+                <ScrollArea className="h-[65vh] pr-3">
+                  {planningResult && planningDayGroups.length > 0 ? (
+                    <div className="space-y-4">
+                      {planningDayGroups.map((group) => (
+                        <div key={group.key} className="space-y-2">
+                          <div className="sticky top-0 z-10 rounded-xl border border-white/8 bg-[rgba(20,22,37,0.94)] px-3 py-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-400 backdrop-blur">
+                            {group.label}
+                          </div>
+                          <div className="space-y-2">
+                            {group.items.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => setSelectedId(item.id)}
+                                className={`w-full rounded-2xl border p-4 text-left transition hover:shadow-sm ${
+                                  selectedId === item.id
+                                    ? "border-fuchsia-400/60 bg-[linear-gradient(135deg,rgba(189,147,249,0.18),rgba(35,37,58,0.96))]"
+                                    : "border-white/8 bg-[rgba(29,31,50,0.75)]"
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-sm font-semibold text-slate-100">
+                                      {item.title}
+                                    </div>
+                                    <div className="mt-1 text-sm text-cyan-100">
+                                      {formatScheduleTimeRange(item)}
+                                    </div>
+                                  </div>
+                                  <Badge variant="outline" className="rounded-xl">
+                                    {item.priority}
+                                  </Badge>
+                                </div>
+                                <div className="mt-2 text-xs text-slate-400">
+                                  {item.kind.replaceAll("_", " ")}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                      {planningLoading
+                        ? "Planning job is running. Your schedule will appear here when it is ready."
+                        : "Write out your goals for the day or week, then generate a plan."}
+                    </div>
+                  )}
+                </ScrollArea>
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+              <CardHeader>
+                <CardTitle className="text-lg">Plan detail</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {planningResult ? (
+                  <div className="space-y-4">
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                        Plan summary
+                      </div>
+                      <div className="mt-2 text-sm leading-6 text-slate-200">
+                        {planningResult.summary}
+                      </div>
+                      <div className="mt-3 text-sm leading-6 text-slate-300">
+                        {planningResult.strategy}
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <Button
+                          className="rounded-2xl"
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            void createPlanningCalendarEvents(
+                              highPriorityPlanningItems,
+                              "High-priority blocks"
+                            )
+                          }
+                          disabled={
+                            planningBulkCalendarLoading || highPriorityPlanningItems.length === 0
+                          }
+                        >
+                          <CalendarDays className="mr-2 h-4 w-4" />
+                          Add high priority
+                        </Button>
+                        {selectedPlanningDayItems.length > 0 ? (
+                          <Button
+                            className="rounded-2xl"
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              void createPlanningCalendarEvents(
+                                selectedPlanningDayItems,
+                                selectedPlanningItem?.day_label || "Selected day"
+                              )
+                            }
+                            disabled={planningBulkCalendarLoading}
+                          >
+                            <CalendarDays className="mr-2 h-4 w-4" />
+                            Add selected day
+                          </Button>
+                        ) : null}
+                      </div>
+                      {planningBulkCalendarMessage ? (
+                        <div className="mt-3 text-sm text-cyan-100">
+                          {planningBulkCalendarMessage}
+                        </div>
+                      ) : null}
+                    </div>
+                    {selectedPlanningItem ? (
+                      <div className="space-y-3">
+                        <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                          <div className="text-xl font-semibold text-slate-100">
+                            {selectedPlanningItem.title}
+                          </div>
+                          <div className="mt-3 inline-flex items-center rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-cyan-100">
+                            {formatScheduleTimeRange(selectedPlanningItem)}
+                          </div>
+                          <div className="mt-4 grid gap-3 md:grid-cols-2">
+                            <div className="rounded-2xl border border-white/6 bg-[rgba(20,22,37,0.82)] p-4">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">
+                                Starts
+                              </div>
+                              <div className="mt-1 text-sm text-slate-200">
+                                {formatScheduleDateTime(selectedPlanningItem.start)}
+                              </div>
+                            </div>
+                            <div className="rounded-2xl border border-white/6 bg-[rgba(20,22,37,0.82)] p-4">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">
+                                Ends
+                              </div>
+                              <div className="mt-1 text-sm text-slate-200">
+                                {formatScheduleDateTime(selectedPlanningItem.end)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            <Badge variant="outline" className="rounded-xl">
+                              {selectedPlanningItem.priority} priority
+                            </Badge>
+                            <Badge variant="outline" className="rounded-xl">
+                              {selectedPlanningItem.kind.replaceAll("_", " ")}
+                            </Badge>
+                          </div>
+                          <div className="mt-4 flex flex-wrap items-center gap-2">
+                            <Button
+                              className="rounded-2xl"
+                              size="sm"
+                              onClick={() => void createPlanningCalendarEvent()}
+                              disabled={planningCalendarLoading}
+                            >
+                              <CalendarDays className="mr-2 h-4 w-4" />
+                              {planningCalendarLoading ? "Creating..." : "Add to Calendar"}
+                            </Button>
+                            {planningCalendarLink ? (
+                              <a
+                                href={planningCalendarLink}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-sm text-cyan-200 underline decoration-cyan-300/40 underline-offset-4"
+                              >
+                                Open event
+                              </a>
+                            ) : null}
+                          </div>
+                          <div className="mt-4 text-sm leading-6 text-slate-200">
+                            {selectedPlanningItem.rationale}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-[1.6rem] border border-dashed border-white/10 p-8 text-sm text-slate-400">
+                        Generate a plan and select a block to inspect it here.
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="rounded-[1.6rem] border border-dashed border-white/10 p-8 text-sm text-slate-400">
+                    Your generated plan details will appear here.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        ) : (
         <div className="grid gap-6 lg:grid-cols-[260px_360px_1fr]">
-          <Card className="rounded-3xl border-none shadow-sm">
+          <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-lg">
                 <Mail className="h-5 w-5" />
                 Mailboxes
               </CardTitle>
-              <p className="text-sm text-zinc-600">
+              <p className="text-sm leading-6 text-slate-300">
                 {mode === "raw"
                   ? "Switch folders and labels like Gmail."
-                  : "The AI view only shows Important mail for review."}
+                  : mode === "schedule"
+                    ? "See upcoming events from your Google Calendar."
+                  : mode === "overview"
+                    ? "See saved AI insights for the selected mailbox without reclassifying everything."
+                  : "Pick a folder or label, review AI summaries, then correct any mistakes."}
               </p>
             </CardHeader>
 
             <CardContent>
               <ScrollArea className="h-[65vh] pr-3">
                 <div className="space-y-2">
-                  {mailboxLabels.map((label) => {
+                  {visibleMailboxLabels.map((label) => {
                     const active = selectedMailbox === label.name;
-                    const disabled = mode !== "raw";
                     const count =
                       label.name === ALL_MAILBOX
                         ? undefined
                         : label.messages_unread > 0
                           ? label.messages_unread
                           : label.messages_total;
+                    const canRemove = !DEFAULT_VISIBLE_MAILBOXES.has(label.name);
 
                     return (
-                      <button
-                        key={label.id}
-                        onClick={() => setSelectedMailbox(label.name)}
-                        disabled={disabled}
-                        className={`flex w-full items-center justify-between rounded-2xl border px-3 py-2 text-left transition ${
-                          active
-                            ? "border-black bg-zinc-900 text-white"
-                            : "border-zinc-200 bg-white text-zinc-700"
-                        } ${disabled ? "cursor-not-allowed opacity-50" : "hover:shadow-sm"}`}
-                      >
-                        <span className="truncate text-sm font-medium">
-                          {label.name === ALL_MAILBOX ? "All Mail" : label.name}
-                        </span>
-                        {count !== undefined ? (
-                          <span
-                            className={`ml-3 shrink-0 text-xs ${
-                              active ? "text-zinc-200" : "text-zinc-500"
-                            }`}
-                          >
-                            {count}
+                      <div key={label.id} className="flex items-center gap-2">
+                        <button
+                          onClick={() => setSelectedMailbox(label.name)}
+                          className={`flex min-w-0 flex-1 items-center justify-between rounded-2xl border px-3 py-2 text-left transition ${
+                            active
+                              ? "border-fuchsia-400/60 bg-[linear-gradient(135deg,rgba(189,147,249,0.22),rgba(40,42,54,0.95))] text-white shadow-[0_10px_28px_rgba(12,12,24,0.36)]"
+                              : "border-white/8 bg-[rgba(29,31,50,0.75)] text-slate-200 hover:border-cyan-300/30 hover:bg-[rgba(37,40,63,0.92)]"
+                          }`}
+                        >
+                          <span className="truncate text-sm font-medium">
+                            {label.name === ALL_MAILBOX ? "All Mail" : label.name}
                           </span>
+                          {count !== undefined ? (
+                            <span
+                              className={`ml-3 shrink-0 text-xs ${
+                                active ? "text-fuchsia-100" : "text-slate-400"
+                              }`}
+                            >
+                              {count}
+                            </span>
+                          ) : null}
+                        </button>
+
+                        {canRemove ? (
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            className="h-10 w-10 rounded-2xl"
+                            onClick={() => {
+                              setExtraVisibleMailboxes((current) =>
+                                current.filter((name) => name !== label.name)
+                              );
+                              if (selectedMailbox === label.name) {
+                                setSelectedMailbox("INBOX");
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
                         ) : null}
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
+
+                {hiddenMailboxLabels.length > 0 ? (
+                  <div className="mt-4 space-y-2 border-t border-white/8 pt-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-400">
+                      Add To Sidebar
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {hiddenMailboxLabels.map((label) => (
+                        <Button
+                          key={label.id}
+                          size="sm"
+                          variant="outline"
+                          className="rounded-2xl"
+                          onClick={() =>
+                            setExtraVisibleMailboxes((current) =>
+                              current.includes(label.name) ? current : [...current, label.name]
+                            )
+                          }
+                        >
+                          <Plus className="mr-2 h-4 w-4" />
+                          {label.name === ALL_MAILBOX ? "All Mail" : label.name}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </ScrollArea>
             </CardContent>
           </Card>
 
-          <Card className="rounded-3xl border-none shadow-sm">
+          <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-lg">
                 <Mail className="h-5 w-5" />
@@ -946,11 +2133,19 @@ export default function HomePage() {
                   ? selectedMailboxLabel?.name === ALL_MAILBOX
                     ? "All Mail"
                     : selectedMailboxLabel?.name || "Inbox"
-                  : "Important review"}
+                  : mode === "schedule"
+                    ? "Schedule"
+                  : mode === "overview"
+                    ? `${selectedMailboxLabel?.name || "Mailbox"} overview`
+                  : classifiedBucket === "important"
+                    ? "Important review"
+                    : classifiedBucket === "unimportant"
+                      ? "Unimportant review"
+                      : "AI overview"}
               </CardTitle>
 
               <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                 <Input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
@@ -959,9 +2154,53 @@ export default function HomePage() {
                 />
               </div>
 
+              {mode === "classified" ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant={classifiedBucket === "all" ? "default" : "outline"}
+                    className="rounded-2xl"
+                    onClick={() => setClassifiedBucket("all")}
+                  >
+                    All
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={classifiedBucket === "important" ? "default" : "outline"}
+                    className="rounded-2xl"
+                    onClick={() => setClassifiedBucket("important")}
+                  >
+                    Important
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={classifiedBucket === "unimportant" ? "default" : "outline"}
+                    className="rounded-2xl"
+                    onClick={() => setClassifiedBucket("unimportant")}
+                  >
+                    Unimportant
+                  </Button>
+                </div>
+              ) : null}
+
+              {mode === "schedule" ? (
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min="1"
+                    max="60"
+                    value={scheduleDays}
+                    onChange={(e) => setScheduleDays(e.target.value)}
+                    className="w-28 rounded-2xl"
+                    placeholder="Days"
+                  />
+                  <div className="text-xs text-slate-400">Days ahead</div>
+                </div>
+              ) : null}
+
               {mode === "raw" ? (
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-xs text-zinc-500">
+                  <div className="text-xs text-slate-400">
                     Showing one row per loaded thread on this page.
                   </div>
                   <div className="flex items-center gap-2">
@@ -999,7 +2238,7 @@ export default function HomePage() {
 
             <CardContent>
               {error ? (
-                <div className="mb-4 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                <div className="mb-4 flex items-start gap-3 rounded-[1.4rem] border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-200">
                   <AlertCircle className="mt-0.5 h-4 w-4" />
                   <div>{error}</div>
                 </div>
@@ -1007,13 +2246,178 @@ export default function HomePage() {
 
               <ScrollArea className="h-[65vh] pr-3">
                 <div className="space-y-3">
-                  {displayEmails.length === 0 && !loading && !cleanupLoading ? (
-                    <div className="rounded-2xl border border-dashed border-zinc-300 p-6 text-sm text-zinc-500">
+                  {mode === "overview" ? (
+                    overview ? (
+                      <div className="space-y-4">
+                        <Card className="rounded-2xl shadow-none">
+                          <CardContent className="p-4">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              Cached emails
+                            </div>
+                            <div className="mt-1 text-2xl font-semibold">
+                              {overview.total_cached}
+                            </div>
+                          </CardContent>
+                        </Card>
+                        <Card className="rounded-2xl shadow-none">
+                          <CardContent className="p-4">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              Needs reply
+                            </div>
+                            <div className="mt-1 text-2xl font-semibold">
+                              {overview.needs_reply}
+                            </div>
+                          </CardContent>
+                        </Card>
+                        <Card className="rounded-2xl shadow-none">
+                          <CardContent className="p-4">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              Action items
+                            </div>
+                            <div className="mt-1 text-2xl font-semibold">
+                              {overview.action_item_count}
+                            </div>
+                          </CardContent>
+                        </Card>
+                        <Card className="rounded-2xl shadow-none">
+                          <CardContent className="p-4">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              Deadlines found
+                            </div>
+                            <div className="mt-1 text-2xl font-semibold">
+                              {overview.deadlines_found}
+                            </div>
+                          </CardContent>
+                        </Card>
+                        <Card className="rounded-2xl shadow-none">
+                          <CardContent className="p-4">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              Categories
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {Object.entries(overview.categories).map(([category, count]) => (
+                                <Badge key={category} variant="outline" className="rounded-xl">
+                                  {category.replaceAll("_", " ")}: {count}
+                                </Badge>
+                              ))}
+                            </div>
+                          </CardContent>
+                        </Card>
+                        <Card className="rounded-2xl shadow-none">
+                          <CardContent className="p-4">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              Top senders
+                            </div>
+                            <div className="mt-3 space-y-2 text-sm text-slate-200">
+                              {overview.top_senders.length === 0 ? (
+                                <div className="text-slate-400">No cached sender data yet.</div>
+                              ) : (
+                                overview.top_senders.map((item) => (
+                                  <div key={item.sender} className="flex items-center justify-between">
+                                    <span className="truncate pr-4">{item.sender}</span>
+                                    <span className="text-slate-400">{item.count}</span>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </CardContent>
+                        </Card>
+                        <Card className="rounded-2xl shadow-none">
+                          <CardContent className="p-4">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              Actionable emails
+                            </div>
+                            <div className="mt-3 space-y-2 text-sm text-slate-200">
+                              {overview.top_action_items.length === 0 ? (
+                                <div className="text-slate-400">No saved action items yet.</div>
+                              ) : (
+                                overview.top_action_items.map((item) => (
+                                  <button
+                                    key={`${item.message_id}-${item.text}`}
+                                    type="button"
+                                    onClick={() => void openOverviewEmail(item.message_id)}
+                                    className="w-full rounded-xl border border-white/6 bg-[rgba(35,37,58,0.78)] px-3 py-2 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(42,45,72,0.92)]"
+                                  >
+                                    <div className="text-sm text-slate-100">{item.text}</div>
+                                    <div className="mt-1 text-xs text-slate-400">
+                                      {item.subject} · {item.sender}
+                                      {item.count > 1 ? ` · ${item.count} emails` : ""}
+                                    </div>
+                                  </button>
+                                ))
+                              )}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
+                    ) : (
+                      <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                        No cached overview yet. Open AI view on this mailbox to build it.
+                      </div>
+                    )
+                  ) : null}
+
+                  {mode === "schedule" ? (
+                    agenda && agenda.items.length > 0 ? (
+                      <div className="space-y-4">
+                        {agendaDayGroups.map((group) => (
+                          <div key={group.key} className="space-y-2">
+                            <div className="sticky top-0 z-10 rounded-xl border border-white/8 bg-[rgba(20,22,37,0.94)] px-3 py-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-400 backdrop-blur">
+                              {group.label}
+                            </div>
+                            <div className="space-y-2">
+                              {group.items.map((item) => (
+                                <button
+                                  key={item.event_id}
+                                  onClick={() => setSelectedId(item.event_id)}
+                                  className={`w-full rounded-2xl border p-4 text-left transition hover:shadow-sm ${
+                                    selectedId === item.event_id
+                                      ? "border-cyan-300/40 bg-[linear-gradient(135deg,rgba(139,233,253,0.18),rgba(35,37,58,0.96))]"
+                                      : "border-white/8 bg-[rgba(29,31,50,0.75)]"
+                                  }`}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="text-sm font-semibold text-slate-100">
+                                        {item.title}
+                                      </div>
+                                      <div className="mt-1 text-sm text-cyan-100">
+                                        {formatScheduleTimeRange(item)}
+                                      </div>
+                                      {item.location ? (
+                                        <div className="mt-1 text-xs text-slate-400">
+                                          {item.location}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                    <Badge variant="outline" className="rounded-xl">
+                                      {item.is_all_day ? "All day" : "Timed"}
+                                    </Badge>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                        No upcoming events found.
+                      </div>
+                    )
+                  ) : null}
+
+                  {mode !== "overview" &&
+                  mode !== "schedule" &&
+                  displayEmails.length === 0 &&
+                  !loading &&
+                  !cleanupLoading ? (
+                    <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
                       No emails found.
                     </div>
                   ) : null}
-
-                  {displayEmails.map((email) => {
+                  {mode !== "overview" && mode !== "schedule" &&
+                    displayEmails.map((email) => {
                     const threadCount = threadCountByEmailId.get(email.id) ?? 1;
                     return (
                       <div key={email.id} className="space-y-2">
@@ -1029,20 +2433,210 @@ export default function HomePage() {
                         ) : null}
                       </div>
                     );
-                  })}
+                    })}
                 </div>
               </ScrollArea>
             </CardContent>
           </Card>
 
-          <Card className="rounded-3xl border-none shadow-sm">
+          <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
             <CardHeader>
-              <CardTitle className="text-lg">Email detail</CardTitle>
+              <CardTitle className="text-lg">
+                {mode === "overview" ? "Overview detail" : "Email detail"}
+              </CardTitle>
             </CardHeader>
 
             <CardContent>
-              {!selectedEmail ? (
-                <div className="rounded-2xl border border-dashed border-zinc-300 p-8 text-sm text-zinc-500">
+              {mode !== "schedule" ? (
+                <div className="mb-6 rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                  <button
+                    type="button"
+                    onClick={() => setGuidanceExpanded((current) => !current)}
+                    className="flex w-full items-start justify-between gap-3 text-left"
+                  >
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                        Classification guidance
+                      </div>
+                      <div className="mt-1 text-sm text-slate-300">
+                        Add notes about what should count as important, unimportant, or action-worthy.
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 text-slate-400">
+                      {guidanceDirty ? (
+                        <Badge variant="outline" className="rounded-xl">
+                          Unsaved
+                        </Badge>
+                      ) : null}
+                      {guidanceExpanded ? (
+                        <ChevronDown className="h-4 w-4" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4" />
+                      )}
+                    </div>
+                  </button>
+
+                  {guidanceExpanded ? (
+                    <div className="mt-4 space-y-3">
+                      <textarea
+                        value={classificationGuidance}
+                        onChange={(e) => setClassificationGuidance(e.target.value)}
+                        placeholder="Example: Treat messages from professors, BYU admin, job opportunities, bills, deadlines, and personal messages as important. Treat newsletters, login alerts, and generic marketing as unimportant."
+                        className="min-h-[140px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
+                      />
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+                        <span>
+                          Saved guidance is included in future AI classification prompts. Cached emails refresh as they are reclassified.
+                        </span>
+                        <span>
+                          {classificationGuidanceUpdatedAt
+                            ? `Updated ${new Date(classificationGuidanceUpdatedAt).toLocaleString()}`
+                            : "Not customized yet"}
+                        </span>
+                      </div>
+                      <div className="flex justify-end">
+                        <Button
+                          className="rounded-2xl"
+                          size="sm"
+                          onClick={() => void saveClassificationGuidance()}
+                          disabled={guidanceLoading || guidanceSaving || !guidanceDirty}
+                        >
+                          {guidanceSaving ? "Saving..." : "Save guidance"}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {mode === "schedule" ? (
+                <div className="space-y-4">
+                  <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4 text-sm text-slate-300">
+                    Upcoming events from your primary Google Calendar, organized as a day-by-day agenda.
+                  </div>
+                  {agenda ? (
+                    (() => {
+                      if (!selectedAgendaEvent) {
+                        return (
+                          <div className="rounded-[1.6rem] border border-dashed border-white/10 p-8 text-sm text-slate-400">
+                            No event selected.
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="space-y-3">
+                          <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                            <div className="text-xl font-semibold text-slate-100">
+                              {selectedAgendaEvent.title}
+                            </div>
+                            <div className="mt-3 inline-flex items-center rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-cyan-100">
+                              {formatScheduleTimeRange(selectedAgendaEvent)}
+                            </div>
+                            <div className="mt-4 grid gap-3 md:grid-cols-2">
+                              <div className="rounded-2xl border border-white/6 bg-[rgba(20,22,37,0.82)] p-4">
+                                <div className="text-xs uppercase tracking-wide text-slate-400">
+                                  Starts
+                                </div>
+                                <div className="mt-1 text-sm text-slate-200">
+                                  {formatScheduleDateTime(
+                                    selectedAgendaEvent.start,
+                                    selectedAgendaEvent.is_all_day
+                                  )}
+                                </div>
+                              </div>
+                              <div className="rounded-2xl border border-white/6 bg-[rgba(20,22,37,0.82)] p-4">
+                                <div className="text-xs uppercase tracking-wide text-slate-400">
+                                  Ends
+                                </div>
+                                <div className="mt-1 text-sm text-slate-200">
+                                  {selectedAgendaEvent.end
+                                    ? formatScheduleDateTime(
+                                        selectedAgendaEvent.end,
+                                        selectedAgendaEvent.is_all_day
+                                      )
+                                    : selectedAgendaEvent.is_all_day
+                                      ? "End of day"
+                                      : "No end time"}
+                                </div>
+                              </div>
+                            </div>
+                            {selectedAgendaEvent.location ? (
+                              <div className="mt-4 text-sm text-slate-200">
+                                <span className="font-medium text-slate-100">Location:</span>{" "}
+                                {selectedAgendaEvent.location}
+                              </div>
+                            ) : null}
+                            {selectedAgendaEvent.description ? (
+                              <div className="mt-3 text-sm text-slate-200">
+                                {selectedAgendaEvent.description}
+                              </div>
+                            ) : null}
+                            {selectedAgendaEvent.html_link ? (
+                              <a
+                                href={selectedAgendaEvent.html_link}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="mt-3 inline-block text-sm text-cyan-200 underline decoration-cyan-300/40 underline-offset-4"
+                              >
+                                Open in Google Calendar
+                              </a>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })()
+                  ) : null}
+                </div>
+              ) : mode === "overview" ? (
+                <div className="space-y-4">
+                  <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4 text-sm text-slate-300">
+                    Saved AI summaries are reused here so this tab can show trends without
+                    rerunning the classifier on every message.
+                  </div>
+                  {overview ? (
+                    <div className="space-y-3">
+                      <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                          Urgency mix
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {Object.entries(overview.urgency).map(([level, count]) => (
+                            <Badge key={level} variant="outline" className="rounded-xl">
+                              {level}: {count}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                          Time-sensitive emails
+                        </div>
+                        <div className="mt-3 space-y-2 text-sm text-slate-200">
+                          {overview.deadline_highlights.length === 0 ? (
+                            <div className="text-slate-400">No saved deadline hints yet.</div>
+                          ) : (
+                            overview.deadline_highlights.map((deadline) => (
+                              <button
+                                key={`${deadline.message_id}-${deadline.text}`}
+                                type="button"
+                                onClick={() => void openOverviewEmail(deadline.message_id)}
+                                className="w-full rounded-xl border border-white/6 bg-[rgba(20,22,37,0.85)] px-3 py-2 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(32,35,57,0.96)]"
+                              >
+                                <div className="text-sm text-slate-100">{deadline.text}</div>
+                                <div className="mt-1 text-xs text-slate-400">
+                                  {deadline.subject} · {deadline.sender}
+                                </div>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : !selectedEmail ? (
+                <div className="rounded-[1.6rem] border border-dashed border-white/10 p-8 text-sm text-slate-400">
                   Select an email to view details.
                 </div>
               ) : (
@@ -1051,14 +2645,21 @@ export default function HomePage() {
                     <h2 className="text-2xl font-semibold leading-tight">
                       {decodeHtmlEntities(selectedEmail.subject) || "(No subject)"}
                     </h2>
-                    <div className="text-sm text-zinc-600">
+                    {isByuEmail(selectedEmail) ? (
+                      <div className="flex flex-wrap gap-2">
+                        <Badge className="rounded-xl bg-sky-500/20 text-sky-100 hover:bg-sky-500/20">
+                          BYU forwarded mail
+                        </Badge>
+                      </div>
+                    ) : null}
+                    <div className="text-sm text-slate-300">
                       From: {decodeHtmlEntities(selectedEmail.sender) || "Unknown sender"}
                     </div>
                     {selectedEmail.date ? (
-                      <div className="text-sm text-zinc-500">{selectedEmail.date}</div>
+                      <div className="text-sm text-slate-400">{selectedEmail.date}</div>
                     ) : null}
                     {mode === "raw" && selectedThreadCount > 1 ? (
-                      <div className="text-sm text-zinc-500">
+                      <div className="text-sm text-slate-400">
                         This row represents {selectedThreadCount} loaded messages in the same
                         thread.
                       </div>
@@ -1066,11 +2667,11 @@ export default function HomePage() {
                   </div>
 
                   {mode === "raw" ? (
-                    <div className="rounded-2xl bg-zinc-50 p-4">
-                      <div className="mb-3 text-xs uppercase tracking-wide text-zinc-500">
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">
                         Conversation actions
                       </div>
-                      <div className="mb-3 text-sm text-zinc-600">
+                      <div className="mb-3 text-sm text-slate-300">
                         These actions apply to every loaded message in this Gmail thread.
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -1108,11 +2709,160 @@ export default function HomePage() {
                         >
                           {handleLoading ? "Marking..." : "Mark handled"}
                         </Button>
-                        <span className="text-xs text-zinc-500">
-                          Removes <span className="font-medium text-zinc-700">Important</span>{" "}
-                          and adds <span className="font-medium text-zinc-700">Reviewed</span>.
+                        <span className="text-xs text-slate-400">
+                          Adds <span className="font-medium text-slate-100">Reviewed</span> and clears any Jarvis importance labels on this conversation.
                         </span>
                       </div>
+                    </div>
+                  ) : null}
+
+                  {mode === "classified" ? (
+                    <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                      <div className="mb-3 text-xs uppercase tracking-wide text-slate-400">
+                        Classification correction
+                      </div>
+                      <div className="mb-3 text-sm text-slate-300">
+                        Fix the Jarvis label on this conversation if the AI put it in the wrong bucket.
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          className="rounded-2xl"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void correctClassification("important")}
+                          disabled={emailActionLoading || !canMarkImportant}
+                        >
+                          Mark Jarvis Important
+                        </Button>
+                        <Button
+                          className="rounded-2xl"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void correctClassification("unimportant")}
+                          disabled={emailActionLoading || !canMarkUnimportant}
+                        >
+                          Mark Jarvis Unimportant
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {calendarLoading ? (
+                    <div className="rounded-2xl bg-zinc-50 p-4 text-sm text-zinc-600">
+                      Loading calendar suggestion...
+                    </div>
+                  ) : null}
+
+                  {calendarPreview ? (
+                    <div className="rounded-2xl bg-zinc-50 p-4">
+                      <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-zinc-500">
+                        <CalendarDays className="h-4 w-4" />
+                        Calendar suggestion
+                      </div>
+                      <div className="space-y-2 text-sm text-zinc-700">
+                        <div>
+                          <span className="font-medium text-zinc-900">Title:</span>{" "}
+                          {calendarPreview.title || "Untitled event"}
+                        </div>
+                        {calendarPreview.start ? (
+                          <div>
+                            <span className="font-medium text-zinc-900">Start:</span>{" "}
+                            {calendarPreview.start}
+                          </div>
+                        ) : null}
+                        {calendarPreview.end ? (
+                          <div>
+                            <span className="font-medium text-zinc-900">End:</span>{" "}
+                            {calendarPreview.end}
+                          </div>
+                        ) : null}
+                        {calendarPreview.location ? (
+                          <div>
+                            <span className="font-medium text-zinc-900">Location:</span>{" "}
+                            {calendarPreview.location}
+                          </div>
+                        ) : null}
+                        {calendarPreview.notes ? (
+                          <div>
+                            <span className="font-medium text-zinc-900">Notes:</span>{" "}
+                            {calendarPreview.notes}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <Button
+                          className="rounded-2xl"
+                          size="sm"
+                          onClick={() => void createCalendarEvent()}
+                          disabled={calendarCreateLoading || !calendarPreview.start}
+                        >
+                          <CalendarDays className="mr-2 h-4 w-4" />
+                          {calendarCreateLoading ? "Creating..." : "Add to Calendar"}
+                        </Button>
+                        {calendarCreateLink ? (
+                          <a
+                            href={calendarCreateLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-sm text-zinc-700 underline"
+                          >
+                            Open event
+                          </a>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {selectedEmail.classification?.short_summary ? (
+                    <div className="rounded-2xl bg-zinc-50 p-4">
+                      <div className="mb-2 text-xs uppercase tracking-wide text-zinc-500">
+                        AI summary
+                      </div>
+                      <div className="text-sm text-zinc-700">
+                        {selectedEmail.classification.short_summary}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {selectedEmail.classification?.why_it_matters ? (
+                    <div className="rounded-2xl bg-zinc-50 p-4">
+                      <div className="mb-2 text-xs uppercase tracking-wide text-zinc-500">
+                        Why it matters
+                      </div>
+                      <div className="text-sm text-zinc-700">
+                        {selectedEmail.classification.why_it_matters}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {(selectedEmail.classification?.action_items?.length ||
+                    selectedEmail.classification?.deadline_hint ||
+                    selectedEmail.classification?.suggested_reply) ? (
+                    <div className="rounded-2xl bg-zinc-50 p-4">
+                      <div className="mb-3 text-xs uppercase tracking-wide text-zinc-500">
+                        Action plan
+                      </div>
+                      {selectedEmail.classification?.action_items?.length ? (
+                        <div className="mb-4 space-y-2">
+                          {selectedEmail.classification.action_items.map((item) => (
+                            <div key={item} className="rounded-xl bg-white px-3 py-2 text-sm text-zinc-700">
+                              {item}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {selectedEmail.classification?.deadline_hint ? (
+                        <div className="mb-3 text-sm text-zinc-700">
+                          <span className="font-medium text-zinc-900">Deadline:</span>{" "}
+                          {selectedEmail.classification.deadline_hint}
+                        </div>
+                      ) : null}
+                      {selectedEmail.classification?.suggested_reply ? (
+                        <div className="text-sm text-zinc-700">
+                          <span className="font-medium text-zinc-900">Suggested reply:</span>{" "}
+                          {selectedEmail.classification.suggested_reply}
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
 
@@ -1286,6 +3036,7 @@ export default function HomePage() {
             </CardContent>
           </Card>
         </div>
+        )}
       </div>
     </div>
   );

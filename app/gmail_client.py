@@ -10,8 +10,9 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from app.classification_cache import update_cached_email
 from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, canonicalize_importance_label
-from app.config import GMAIL_SCOPES, GMAIL_TOKEN_FILE, GMAIL_CREDENTIALS_FILE
+from app.config import GMAIL_TOKEN_FILE, GMAIL_CREDENTIALS_FILE, GOOGLE_SCOPES
 from app.schemas import CleanupDecision, CleanupItem, CleanupResponse, CleanupSummary, EmailClassification, EmailPageResponse, EmailSummary, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleDecision, RuleItem, RuleProcessResponse, RuleSummary
 
 REVIEWED_LABEL = "Reviewed"
@@ -28,7 +29,7 @@ def get_gmail_service():
 
     if os.path.exists(GMAIL_TOKEN_FILE):
         try:
-            creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, GMAIL_SCOPES)
+            creds = Credentials.from_authorized_user_file(GMAIL_TOKEN_FILE, GOOGLE_SCOPES)
         except Exception as exc:
             raise RuntimeError(
                 f"Failed to read Gmail token file at {GMAIL_TOKEN_FILE}: {exc}"
@@ -50,12 +51,12 @@ def get_gmail_service():
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     GMAIL_CREDENTIALS_FILE,
-                    GMAIL_SCOPES,
+                    GOOGLE_SCOPES,
                 )
                 creds = flow.run_local_server(port=0)
             except Exception as exc:
                 raise RuntimeError(
-                    "Failed to complete Gmail OAuth flow. "
+                    "Failed to complete Google OAuth flow. "
                     "On a server deployment, make sure /data/credentials.json and /data/token.json "
                     "exist in the container, or generate the token locally first."
                 ) from exc
@@ -192,6 +193,12 @@ def _fetch_message(service, msg_id: str, label_id_to_name: Dict[str, str]) -> Em
         .execute()
     )
     return _to_email_summary(full_msg, label_id_to_name)
+
+
+def get_email_by_id(message_id: str) -> EmailSummary:
+    service = get_gmail_service()
+    label_id_to_name, _ = get_label_maps(service)
+    return _fetch_message(service, message_id, label_id_to_name)
 
 
 def _list_inbox_message_ids(service, limit: Optional[int] = None, unread_only: bool = False) -> List[str]:
@@ -626,7 +633,15 @@ def mark_email_handled(message_id: str) -> HandleEmailResponse:
     if REVIEWED_LABEL not in email.labels:
         add_label_ids.append(reviewed_label_id)
 
-    for label_name in {IMPORTANT_LABEL, *LEGACY_IMPORTANT_LABELS}:
+    if "UNREAD" in email.labels:
+        remove_label_ids.append("UNREAD")
+
+    for label_name in {
+        IMPORTANT_LABEL,
+        UNIMPORTANT_LABEL,
+        *LEGACY_IMPORTANT_LABELS,
+        *LEGACY_UNIMPORTANT_LABELS,
+    }:
         label_id = label_name_to_id.get(label_name)
         if label_id and label_name in email.labels:
             remove_label_ids.append(label_id)
@@ -638,9 +653,12 @@ def mark_email_handled(message_id: str) -> HandleEmailResponse:
         remove_label_ids=remove_label_ids,
     )
 
+    updated_email = _fetch_message(service, message_id, label_id_to_name)
+    update_cached_email(updated_email)
+
     return HandleEmailResponse(
         message_id=message_id,
-        removed_label=IMPORTANT_LABEL,
+        removed_label="Jarvis labels",
         added_label=REVIEWED_LABEL,
         status="handled",
     )
@@ -660,14 +678,14 @@ def update_email(
     remove_label_ids: List[str] = []
 
     for label_name in add_label_names or []:
-        cleaned = " ".join(label_name.split()).strip()
+        cleaned = canonicalize_importance_label(" ".join(label_name.split()).strip())
         if not cleaned:
             continue
         label_id = _get_or_create_label_id(service, cleaned, label_name_to_id)
         add_label_ids.append(label_id)
 
     for label_name in remove_label_names or []:
-        cleaned = " ".join(label_name.split()).strip()
+        cleaned = canonicalize_importance_label(" ".join(label_name.split()).strip())
         if not cleaned:
             continue
         label_id = label_name_to_id.get(cleaned)
@@ -700,6 +718,7 @@ def update_email(
     )
 
     updated_email = _fetch_message(service, message_id, label_id_to_name)
+    update_cached_email(updated_email)
     return EmailUpdateResponse(email=updated_email)
 
 
