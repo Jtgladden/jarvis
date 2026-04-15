@@ -9,6 +9,8 @@ This repo is now packaged to run as two containers:
 - `api`: FastAPI + Gmail/OpenAI logic on port `8000`
 - `web`: Next.js dashboard on port `3000`
 
+The dashboard now talks to the backend through same-origin `/api` requests. In Docker, the Next.js app rewrites `/api/*` to the internal `api` service automatically.
+
 ### Files
 
 - [docker-compose.yml](/Users/jt_gladden/Dev/jarvis/docker-compose.yml)

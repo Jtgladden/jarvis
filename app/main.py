@@ -2,7 +2,7 @@ from threading import Lock, Thread
 from time import sleep
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, classify_cleanup_email, classify_email, classify_new_email_ai_fallback
@@ -12,6 +12,7 @@ from app.rules import classify_new_email_rule
 from app.schemas import CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleProcessResponse
 
 app = FastAPI(title="Mail AI", version="0.1.0")
+api = APIRouter(prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,
@@ -125,7 +126,12 @@ def root():
     return {"message": "Mail AI backend is running"}
 
 
-@app.get("/emails", response_model=list[EmailSummary])
+@api.get("/", response_model=dict[str, str])
+def api_root():
+    return {"message": "Mail AI backend is running"}
+
+
+@api.get("/emails", response_model=list[EmailSummary])
 def list_emails(
     limit: int | None = Query(default=None, ge=1),
     mailbox: str = Query(default="INBOX"),
@@ -140,12 +146,12 @@ def list_emails(
     return get_recent_inbox_emails(max_results=limit)
 
 
-@app.get("/labels", response_model=list[GmailLabel])
+@api.get("/labels", response_model=list[GmailLabel])
 def list_labels():
     return list_gmail_labels()
 
 
-@app.get("/classify")
+@api.get("/classify")
 def classify_emails(limit: int | None = Query(default=None, ge=1)):
     requested_limit = (
         OPENAI_MAX_EMAILS_PER_RUN if limit is None else min(limit, OPENAI_MAX_EMAILS_PER_RUN)
@@ -163,17 +169,17 @@ def classify_emails(limit: int | None = Query(default=None, ge=1)):
     return results
 
 
-@app.post("/cleanup/preview", response_model=CleanupJobStartResponse)
+@api.post("/cleanup/preview", response_model=CleanupJobStartResponse)
 def preview_inbox_cleanup(limit: int | None = Query(default=None, ge=1)):
     return _start_cleanup_job(limit=limit, dry_run=True)
 
 
-@app.post("/cleanup/apply", response_model=CleanupJobStartResponse)
+@api.post("/cleanup/apply", response_model=CleanupJobStartResponse)
 def apply_inbox_cleanup(limit: int | None = Query(default=None, ge=1)):
     return _start_cleanup_job(limit=limit, dry_run=False)
 
 
-@app.get("/cleanup/jobs/{job_id}", response_model=CleanupJobStatus)
+@api.get("/cleanup/jobs/{job_id}", response_model=CleanupJobStatus)
 def get_cleanup_job(job_id: str):
     with _cleanup_jobs_lock:
         job = _cleanup_jobs.get(job_id)
@@ -184,7 +190,7 @@ def get_cleanup_job(job_id: str):
     return job
 
 
-@app.post("/rules/preview-new", response_model=RuleProcessResponse)
+@api.post("/rules/preview-new", response_model=RuleProcessResponse)
 def preview_new_email_rules(
     limit: int | None = Query(default=50, ge=1),
     unread_only: bool = Query(default=True),
@@ -199,7 +205,7 @@ def preview_new_email_rules(
     return response.model_copy(update={"unread_only": unread_only})
 
 
-@app.post("/rules/apply-new", response_model=RuleProcessResponse)
+@api.post("/rules/apply-new", response_model=RuleProcessResponse)
 def apply_new_email_rules(
     limit: int | None = Query(default=50, ge=1),
     unread_only: bool = Query(default=True),
@@ -214,12 +220,12 @@ def apply_new_email_rules(
     return response.model_copy(update={"unread_only": unread_only})
 
 
-@app.post("/emails/{message_id}/handle", response_model=HandleEmailResponse)
+@api.post("/emails/{message_id}/handle", response_model=HandleEmailResponse)
 def handle_email(message_id: str):
     return mark_email_handled(message_id)
 
 
-@app.patch("/emails/{message_id}", response_model=EmailUpdateResponse)
+@api.patch("/emails/{message_id}", response_model=EmailUpdateResponse)
 def patch_email(message_id: str, payload: EmailUpdateRequest):
     return update_email(
         message_id=message_id,
@@ -228,3 +234,6 @@ def patch_email(message_id: str, payload: EmailUpdateRequest):
         archive=payload.archive,
         unread=payload.unread,
     )
+
+
+app.include_router(api)

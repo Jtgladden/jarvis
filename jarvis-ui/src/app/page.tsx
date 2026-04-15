@@ -19,7 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
 const IMPORTANT_LABEL = "Important";
 const LEGACY_IMPORTANT_LABELS = new Set(["AI Important", "Rules Important"]);
 const ALL_MAILBOX = "ALL";
