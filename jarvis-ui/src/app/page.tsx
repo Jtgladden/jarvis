@@ -489,6 +489,11 @@ type JournalDayEntry = {
 type JournalResponse = {
   generated_at: string;
   entries: JournalDayEntry[];
+  total_entries: number;
+  has_more: boolean;
+  next_before?: string | null;
+  saved_only: boolean;
+  query: string;
 };
 
 type JournalDraft = {
@@ -504,6 +509,13 @@ type JournalDraft = {
 type JournalSectionState = {
   calendarOpen: boolean;
   articlesOpen: boolean;
+};
+
+type JournalLoadOptions = {
+  before?: string | null;
+  query?: string;
+  savedOnly?: boolean;
+  history?: Array<string | null>;
 };
 
 type TaskWindow = "today" | "this_week" | "next_week";
@@ -584,6 +596,89 @@ const decisionTone: Record<CleanupDecision["action"], "default" | "secondary" | 
 
 function safeLower(value: string | undefined) {
   return (value || "").toLowerCase();
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getJournalSearchPatterns(query: string) {
+  const normalized = query.trim();
+  if (!normalized) return [];
+
+  return Array.from(
+    new Set(
+      [normalized, ...normalized.split(/\s+/)]
+        .map((part) => part.trim())
+        .filter((part) => part.length >= 2)
+    )
+  ).sort((left, right) => right.length - left.length);
+}
+
+function textMatchesJournalQuery(text: string | null | undefined, query: string) {
+  if (!text) return false;
+  const haystack = text.toLowerCase();
+  return getJournalSearchPatterns(query).some((pattern) =>
+    haystack.includes(pattern.toLowerCase())
+  );
+}
+
+function highlightJournalSearchText(
+  text: string | null | undefined,
+  query: string
+): React.ReactNode {
+  const value = text || "";
+  const patterns = getJournalSearchPatterns(query);
+  if (!value || !patterns.length) {
+    return value;
+  }
+
+  const matcher = new RegExp(`(${patterns.map(escapeRegex).join("|")})`, "gi");
+  const segments = value.split(matcher);
+
+  return segments.map((segment, index) =>
+    patterns.some((pattern) => segment.toLowerCase() === pattern.toLowerCase()) ? (
+      <mark
+        key={`${segment}-${index}`}
+        className="rounded-md bg-fuchsia-400/20 px-1 py-0.5 text-fuchsia-100 ring-1 ring-fuchsia-300/25"
+      >
+        {segment}
+      </mark>
+    ) : (
+      <React.Fragment key={`${segment}-${index}`}>{segment}</React.Fragment>
+    )
+  );
+}
+
+function JournalPreviewBlock({
+  label,
+  value,
+  query,
+  placeholder,
+}: {
+  label: string;
+  value: string | null | undefined;
+  query: string;
+  placeholder: string;
+}) {
+  const hasValue = Boolean((value || "").trim());
+
+  return (
+    <div className="space-y-2">
+      <div className="text-xs uppercase tracking-wide text-slate-400">{label}</div>
+      <div
+        className={`min-h-[180px] rounded-[1.2rem] border px-4 py-3 text-sm leading-6 ${
+          hasValue
+            ? "border-white/8 bg-[rgba(20,22,37,0.72)] text-slate-100"
+            : "border-dashed border-white/10 bg-[rgba(20,22,37,0.42)] text-slate-500"
+        }`}
+      >
+        <div className="whitespace-pre-wrap break-words">
+          {hasValue ? highlightJournalSearchText(value, query) : placeholder}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function decodeHtmlEntities(value: string | undefined) {
@@ -852,6 +947,12 @@ export default function HomePage() {
   const [journalDrafts, setJournalDrafts] = useState<Record<string, JournalDraft>>({});
   const [journalSectionState, setJournalSectionState] = useState<Record<string, JournalSectionState>>({});
   const [journalSavingDate, setJournalSavingDate] = useState<string | null>(null);
+  const [journalEditingDate, setJournalEditingDate] = useState<string | null>(null);
+  const [journalSearchInput, setJournalSearchInput] = useState("");
+  const [journalQuery, setJournalQuery] = useState("");
+  const [journalSavedOnly, setJournalSavedOnly] = useState(false);
+  const [journalBefore, setJournalBefore] = useState<string | null>(null);
+  const [journalHistory, setJournalHistory] = useState<Array<string | null>>([]);
   const [classifiedBucket] = useState<"all" | "important" | "unimportant">("all");
   const [overview, setOverview] = useState<ClassificationOverview | null>(null);
   const [agenda, setAgenda] = useState<CalendarAgenda | null>(null);
@@ -1116,12 +1217,27 @@ export default function HomePage() {
     }
   };
 
-  const loadJournal = async () => {
+  const loadJournal = async (options: JournalLoadOptions = {}) => {
     setLoading(true);
     setError("");
 
     try {
-      const response = await fetch(`${API_BASE}/journal`);
+      const before = options.before ?? journalBefore;
+      const nextQuery = options.query ?? journalQuery;
+      const nextSavedOnly = options.savedOnly ?? journalSavedOnly;
+      const params = new URLSearchParams();
+      params.set("days", nextSavedOnly || nextQuery ? "20" : "14");
+      if (before) {
+        params.set("before", before);
+      }
+      if (nextSavedOnly) {
+        params.set("saved_only", "true");
+      }
+      if (nextQuery.trim()) {
+        params.set("query", nextQuery.trim());
+      }
+
+      const response = await fetch(`${API_BASE}/journal?${params.toString()}`);
       if (!response.ok) {
         throw new Error(
           await getErrorMessage(response, `Journal request failed with status ${response.status}`)
@@ -1130,8 +1246,9 @@ export default function HomePage() {
 
       const data: JournalResponse = await response.json();
       setJournal(data);
-      setJournalDrafts(
-        Object.fromEntries(
+      setJournalDrafts((current) => ({
+        ...current,
+        ...Object.fromEntries(
           data.entries.map((entry) => [
             entry.date,
             {
@@ -1144,8 +1261,13 @@ export default function HomePage() {
               calendar_items: entry.calendar_items || [],
             },
           ])
-        )
-      );
+        ),
+      }));
+      setJournalBefore(before);
+      setJournalQuery(nextQuery);
+      setJournalSearchInput(nextQuery);
+      setJournalSavedOnly(nextSavedOnly || Boolean(nextQuery.trim()));
+      setJournalHistory(options.history ?? journalHistory);
       setOverview(null);
       setAgenda(null);
       setEmails([]);
@@ -1200,12 +1322,18 @@ export default function HomePage() {
             }
           : current
       );
-      await loadJournal();
+      await loadJournal({
+        before: journalBefore,
+        query: journalQuery,
+        savedOnly: journalSavedOnly,
+        history: journalHistory,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to save journal entry.";
       setError(message);
     } finally {
       setJournalSavingDate(null);
+      setJournalEditingDate(null);
     }
   };
 
@@ -1213,6 +1341,60 @@ export default function HomePage() {
     const draft = journalDrafts[entryDate];
     if (!draft) return;
     await persistJournalDraft(entryDate, draft);
+  };
+
+  const applyJournalSearch = async () => {
+    const nextQuery = journalSearchInput.trim();
+    await loadJournal({
+      before: null,
+      query: nextQuery,
+      savedOnly: journalSavedOnly || Boolean(nextQuery),
+      history: [],
+    });
+  };
+
+  const clearJournalSearch = async () => {
+    setJournalSearchInput("");
+    await loadJournal({
+      before: null,
+      query: "",
+      savedOnly: false,
+      history: [],
+    });
+  };
+
+  const toggleJournalArchiveMode = async (savedOnly: boolean) => {
+    if (!savedOnly && journalSearchInput.trim()) {
+      setJournalSearchInput("");
+    }
+    await loadJournal({
+      before: null,
+      query: savedOnly ? journalSearchInput.trim() : "",
+      savedOnly,
+      history: [],
+    });
+  };
+
+  const loadOlderJournalEntries = async () => {
+    if (!journal?.next_before) return;
+    await loadJournal({
+      before: journal.next_before,
+      query: journalQuery,
+      savedOnly: journalSavedOnly,
+      history: [...journalHistory, journalBefore],
+    });
+  };
+
+  const loadNewerJournalEntries = async () => {
+    if (!journalHistory.length) return;
+    const nextHistory = journalHistory.slice(0, -1);
+    const previousBefore = journalHistory[journalHistory.length - 1] ?? null;
+    await loadJournal({
+      before: previousBefore,
+      query: journalQuery,
+      savedOnly: journalSavedOnly,
+      history: nextHistory,
+    });
   };
 
   const toggleJournalSection = (
@@ -3100,6 +3282,104 @@ export default function HomePage() {
           </div>
         ) : mode === "journal" ? (
           <div className="space-y-6">
+            <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+              <CardHeader className="pb-3">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <BookOpen className="h-5 w-5" />
+                      Journal archive
+                    </CardTitle>
+                    <p className="mt-2 text-sm leading-6 text-slate-300">
+                      Browse recent days or jump into saved entries without rendering your whole history at once.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant={!journalSavedOnly ? "default" : "outline"}
+                      className="rounded-2xl"
+                      onClick={() => void toggleJournalArchiveMode(false)}
+                    >
+                      Recent timeline
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={journalSavedOnly ? "default" : "outline"}
+                      className="rounded-2xl"
+                      onClick={() => void toggleJournalArchiveMode(true)}
+                    >
+                      Saved archive
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-col gap-3 lg:flex-row">
+                  <div className="relative flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                    <Input
+                      value={journalSearchInput}
+                      onChange={(e) => setJournalSearchInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void applyJournalSearch();
+                        }
+                      }}
+                      className="h-11 rounded-2xl pl-9"
+                      placeholder="Search dates, reflections, gratitude, or world events"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      className="rounded-2xl"
+                      onClick={() => void applyJournalSearch()}
+                    >
+                      Search
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="rounded-2xl"
+                      onClick={() => void clearJournalSearch()}
+                      disabled={!journalQuery && !journalSearchInput && !journalSavedOnly}
+                    >
+                      Reset
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-3 text-sm text-slate-300 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    {journalQuery
+                      ? `Showing ${journal?.entries.length || 0} of ${journal?.total_entries || 0} saved entries matching "${journalQuery}".`
+                      : journalSavedOnly
+                        ? `Showing ${journal?.entries.length || 0} saved entries from your archive.`
+                        : `Showing ${journal?.entries.length || 0} recent days at a time so the journal stays fast to navigate.`}
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-2xl"
+                      onClick={() => void loadNewerJournalEntries()}
+                      disabled={!journalHistory.length || loading}
+                    >
+                      Newer
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-2xl"
+                      onClick={() => void loadOlderJournalEntries()}
+                      disabled={!journal?.has_more || loading}
+                    >
+                      Older
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
             {error ? (
               <div className="flex items-start gap-3 rounded-[1.4rem] border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-200">
                 <AlertCircle className="mt-0.5 h-4 w-4" />
@@ -3121,6 +3401,15 @@ export default function HomePage() {
                   calendarOpen: false,
                   articlesOpen: false,
                 };
+                const dateLabel = highlightJournalSearchText(entry.date_label, journalQuery);
+                const calendarSummary = highlightJournalSearchText(entry.calendar_summary, journalQuery);
+                const worldEventTitle = highlightJournalSearchText(
+                  entry.world_event_title || "No headline captured for this day",
+                  journalQuery
+                );
+                const worldEventSource = highlightJournalSearchText(entry.world_event_source, journalQuery);
+                const worldEventSummary = highlightJournalSearchText(entry.world_event_summary, journalQuery);
+                const isEditingJournalEntry = journalEditingDate === entry.date;
 
                 return (
                   <Card
@@ -3132,7 +3421,7 @@ export default function HomePage() {
                         <div>
                           <CardTitle className="flex items-center gap-2 text-lg">
                             <BookOpen className="h-5 w-5" />
-                            {entry.date_label}
+                            <span>{dateLabel}</span>
                           </CardTitle>
                           <p className="mt-2 text-sm leading-6 text-slate-300">
                             A quick memory capsule from your calendar plus one world event from the day.
@@ -3165,7 +3454,7 @@ export default function HomePage() {
                                     : "line-clamp-1 text-xs leading-5 text-slate-300"
                                 }`}
                               >
-                                {entry.calendar_summary}
+                                {calendarSummary}
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
@@ -3212,13 +3501,19 @@ export default function HomePage() {
                               </div>
                               {draft.calendar_items.length ? (
                                 draft.calendar_items.map((item, itemIndex) => (
+                                  (() => {
+                                    const calendarTitleMatches = textMatchesJournalQuery(
+                                      item.title,
+                                      journalQuery
+                                    );
+                                    return (
                                   <div
                                     key={`${item.event_id}-${itemIndex}`}
                                     className={`rounded-[1rem] border px-3 py-3 text-sm transition ${
                                       item.removed
                                         ? "border-dashed border-white/10 bg-[rgba(20,22,37,0.4)] text-slate-500"
                                         : "border-cyan-300/20 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(20,22,37,0.88))] text-slate-200 shadow-[0_6px_18px_rgba(8,10,20,0.14)]"
-                                    }`}
+                                    } ${calendarTitleMatches ? "ring-1 ring-fuchsia-300/35 shadow-[0_0_0_1px_rgba(232,121,249,0.18)]" : ""}`}
                                   >
                                     <div className="space-y-2">
                                       <div className="flex items-start justify-between gap-3">
@@ -3254,6 +3549,11 @@ export default function HomePage() {
                                             >
                                               {formatScheduleTimeRange(item)}
                                             </span>
+                                            {calendarTitleMatches ? (
+                                              <span className="inline-flex items-center rounded-full border border-fuchsia-300/25 bg-fuchsia-400/15 px-2.5 py-1 text-fuchsia-100">
+                                                Search match in title
+                                              </span>
+                                            ) : null}
                                             {item.removed ? (
                                               <span className="text-slate-500">Marked as not done</span>
                                             ) : null}
@@ -3281,6 +3581,8 @@ export default function HomePage() {
                                       </div>
                                     </div>
                                   </div>
+                                    );
+                                  })()
                                 ))
                               ) : (
                                 <div className="text-sm text-slate-400">
@@ -3292,38 +3594,81 @@ export default function HomePage() {
                         </div>
 
                         <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
-                          <div className="text-xs uppercase tracking-wide text-slate-400">
-                            Scripture / spiritual study
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-xs uppercase tracking-wide text-slate-400">
+                              Scripture / spiritual study
+                            </div>
+                            <Button
+                              size="sm"
+                              variant={isEditingJournalEntry ? "default" : "outline"}
+                              className="rounded-xl"
+                              onClick={() =>
+                                setJournalEditingDate((current) =>
+                                  current === entry.date ? null : entry.date
+                                )
+                              }
+                            >
+                              {isEditingJournalEntry ? "Close editor" : "Edit notes"}
+                            </Button>
                           </div>
                           <div className="mt-3 space-y-3">
-                            <Input
-                              value={draft.scripture_study}
-                              onChange={(e) =>
-                                setJournalDrafts((current) => ({
-                                  ...current,
-                                  [entry.date]: {
-                                    ...draft,
-                                    scripture_study: e.target.value,
-                                  },
-                                }))
-                              }
-                              className="h-10 rounded-xl"
-                              placeholder="What did you study today?"
-                            />
-                            <textarea
-                              value={draft.spiritual_notes}
-                              onChange={(e) =>
-                                setJournalDrafts((current) => ({
-                                  ...current,
-                                  [entry.date]: {
-                                    ...draft,
-                                    spiritual_notes: e.target.value,
-                                  },
-                                }))
-                              }
-                              placeholder="Spiritual notes, impressions, questions, or insights."
-                              className="min-h-[132px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-300/40"
-                            />
+                            {isEditingJournalEntry ? (
+                              <>
+                                <Input
+                                  value={draft.scripture_study}
+                                  onChange={(e) =>
+                                    setJournalDrafts((current) => ({
+                                      ...current,
+                                      [entry.date]: {
+                                        ...draft,
+                                        scripture_study: e.target.value,
+                                      },
+                                    }))
+                                  }
+                                  className="h-10 rounded-xl"
+                                  placeholder="What did you study today?"
+                                />
+                                <textarea
+                                  value={draft.spiritual_notes}
+                                  onChange={(e) =>
+                                    setJournalDrafts((current) => ({
+                                      ...current,
+                                      [entry.date]: {
+                                        ...draft,
+                                        spiritual_notes: e.target.value,
+                                      },
+                                    }))
+                                  }
+                                  placeholder="Spiritual notes, impressions, questions, or insights."
+                                  className="min-h-[132px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-300/40"
+                                />
+                              </>
+                            ) : (
+                              <>
+                                <JournalPreviewBlock
+                                  label="Study"
+                                  value={draft.scripture_study}
+                                  query={journalQuery}
+                                  placeholder="No study saved for this day yet."
+                                />
+                                <div className="space-y-2">
+                                  <div className="text-xs uppercase tracking-wide text-slate-400">
+                                    Spiritual notes
+                                  </div>
+                                  <div className={`rounded-[1.2rem] border px-4 py-3 text-sm leading-6 ${
+                                    draft.spiritual_notes.trim()
+                                      ? "border-white/8 bg-[rgba(20,22,37,0.72)] text-slate-100"
+                                      : "border-dashed border-white/10 bg-[rgba(20,22,37,0.42)] text-slate-500"
+                                  }`}>
+                                    <div className="whitespace-pre-wrap break-words">
+                                      {draft.spiritual_notes.trim()
+                                        ? highlightJournalSearchText(draft.spiritual_notes, journalQuery)
+                                        : "No spiritual notes saved for this day yet."}
+                                    </div>
+                                  </div>
+                                </div>
+                              </>
+                            )}
                           </div>
                         </div>
                         </div>
@@ -3334,13 +3679,13 @@ export default function HomePage() {
                               World event
                             </div>
                             <div className="mt-3 text-base font-medium text-slate-100">
-                              {entry.world_event_title || "No headline captured for this day"}
+                              {worldEventTitle}
                             </div>
                             {entry.world_event_source ? (
-                              <div className="mt-1 text-xs text-cyan-100">{entry.world_event_source}</div>
+                              <div className="mt-1 text-xs text-cyan-100">{worldEventSource}</div>
                             ) : null}
                             <div className="mt-3 text-sm leading-6 text-slate-200">
-                              {entry.world_event_summary}
+                              {worldEventSummary}
                             </div>
                             {entry.world_event_articles?.length ? (
                               <div className="mt-4">
@@ -3374,9 +3719,11 @@ export default function HomePage() {
                                           rel="noreferrer"
                                           className="block w-full rounded-[1rem] border border-white/6 bg-[rgba(20,22,37,0.82)] px-3 py-2 text-left transition hover:border-cyan-300/30 hover:bg-[rgba(32,35,57,0.96)]"
                                         >
-                                          <div className="text-sm text-slate-100">{article.title}</div>
+                                          <div className="text-sm text-slate-100">
+                                            {highlightJournalSearchText(article.title, journalQuery)}
+                                          </div>
                                           <div className="mt-1 text-xs text-slate-400">
-                                            {article.source || "Article"}
+                                            {highlightJournalSearchText(article.source || "Article", journalQuery)}
                                           </div>
                                         </a>
                                       ) : (
@@ -3384,9 +3731,11 @@ export default function HomePage() {
                                           key={`${article.title}-${index}`}
                                           className="rounded-[1rem] border border-white/6 bg-[rgba(20,22,37,0.82)] px-3 py-2"
                                         >
-                                          <div className="text-sm text-slate-100">{article.title}</div>
+                                          <div className="text-sm text-slate-100">
+                                            {highlightJournalSearchText(article.title, journalQuery)}
+                                          </div>
                                           <div className="mt-1 text-xs text-slate-400">
-                                            {article.source || "Article"}
+                                            {highlightJournalSearchText(article.source || "Article", journalQuery)}
                                           </div>
                                         </div>
                                       )
@@ -3452,90 +3801,117 @@ export default function HomePage() {
                       </div>
 
                       <div className="grid gap-4 lg:grid-cols-3">
-                        <div className="space-y-2">
-                          <div className="text-xs uppercase tracking-wide text-slate-400">
-                            Journal entry
-                          </div>
-                          <textarea
-                            value={draft.journal_entry}
-                            onChange={(e) =>
-                              setJournalDrafts((current) => ({
-                                ...current,
-                                [entry.date]: {
-                                  ...draft,
-                                  journal_entry: e.target.value,
-                                  accomplishments: current[entry.date]?.accomplishments ?? draft.accomplishments,
-                                  gratitude_entry: current[entry.date]?.gratitude_entry ?? draft.gratitude_entry,
-                                  scripture_study: current[entry.date]?.scripture_study ?? draft.scripture_study,
-                                  spiritual_notes: current[entry.date]?.spiritual_notes ?? draft.spiritual_notes,
-                                  photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
-                                },
-                              }))
-                            }
-                            placeholder="Write a quick reflection about the day."
-                            className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
-                          />
-                        </div>
+                        {isEditingJournalEntry ? (
+                          <>
+                            <div className="space-y-2">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">
+                                Journal entry
+                              </div>
+                              <textarea
+                                value={draft.journal_entry}
+                                onChange={(e) =>
+                                  setJournalDrafts((current) => ({
+                                    ...current,
+                                    [entry.date]: {
+                                      ...draft,
+                                      journal_entry: e.target.value,
+                                      accomplishments: current[entry.date]?.accomplishments ?? draft.accomplishments,
+                                      gratitude_entry: current[entry.date]?.gratitude_entry ?? draft.gratitude_entry,
+                                      scripture_study: current[entry.date]?.scripture_study ?? draft.scripture_study,
+                                      spiritual_notes: current[entry.date]?.spiritual_notes ?? draft.spiritual_notes,
+                                      photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
+                                    },
+                                  }))
+                                }
+                                placeholder="Write a quick reflection about the day."
+                                className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
+                              />
+                            </div>
 
-                        <div className="space-y-2">
-                          <div className="text-xs uppercase tracking-wide text-slate-400">
-                            Accomplishments
-                          </div>
-                          <textarea
-                            value={draft.accomplishments}
-                            onChange={(e) =>
-                              setJournalDrafts((current) => ({
-                                ...current,
-                                [entry.date]: {
-                                  ...draft,
-                                  journal_entry: current[entry.date]?.journal_entry ?? draft.journal_entry,
-                                  accomplishments: e.target.value,
-                                  gratitude_entry: current[entry.date]?.gratitude_entry ?? draft.gratitude_entry,
-                                  scripture_study: current[entry.date]?.scripture_study ?? draft.scripture_study,
-                                  spiritual_notes: current[entry.date]?.spiritual_notes ?? draft.spiritual_notes,
-                                  photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
-                                },
-                              }))
-                            }
-                            placeholder="List wins, progress, or things you want to remember."
-                            className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
-                          />
-                        </div>
+                            <div className="space-y-2">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">
+                                Accomplishments
+                              </div>
+                              <textarea
+                                value={draft.accomplishments}
+                                onChange={(e) =>
+                                  setJournalDrafts((current) => ({
+                                    ...current,
+                                    [entry.date]: {
+                                      ...draft,
+                                      journal_entry: current[entry.date]?.journal_entry ?? draft.journal_entry,
+                                      accomplishments: e.target.value,
+                                      gratitude_entry: current[entry.date]?.gratitude_entry ?? draft.gratitude_entry,
+                                      scripture_study: current[entry.date]?.scripture_study ?? draft.scripture_study,
+                                      spiritual_notes: current[entry.date]?.spiritual_notes ?? draft.spiritual_notes,
+                                      photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
+                                    },
+                                  }))
+                                }
+                                placeholder="List wins, progress, or things you want to remember."
+                                className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
+                              />
+                            </div>
 
-                        <div className="space-y-2">
-                          <div className="text-xs uppercase tracking-wide text-slate-400">
-                            Gratitude
-                          </div>
-                          <textarea
-                            value={draft.gratitude_entry}
-                            onChange={(e) =>
-                              setJournalDrafts((current) => ({
-                                ...current,
-                                [entry.date]: {
-                                  ...draft,
-                                  journal_entry: current[entry.date]?.journal_entry ?? draft.journal_entry,
-                                  accomplishments: current[entry.date]?.accomplishments ?? draft.accomplishments,
-                                  gratitude_entry: e.target.value,
-                                  scripture_study: current[entry.date]?.scripture_study ?? draft.scripture_study,
-                                  spiritual_notes: current[entry.date]?.spiritual_notes ?? draft.spiritual_notes,
-                                  photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
-                                },
-                              }))
-                            }
-                            placeholder="What felt good, generous, or worth appreciating today?"
-                            className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
-                          />
-                        </div>
+                            <div className="space-y-2">
+                              <div className="text-xs uppercase tracking-wide text-slate-400">
+                                Gratitude
+                              </div>
+                              <textarea
+                                value={draft.gratitude_entry}
+                                onChange={(e) =>
+                                  setJournalDrafts((current) => ({
+                                    ...current,
+                                    [entry.date]: {
+                                      ...draft,
+                                      journal_entry: current[entry.date]?.journal_entry ?? draft.journal_entry,
+                                      accomplishments: current[entry.date]?.accomplishments ?? draft.accomplishments,
+                                      gratitude_entry: e.target.value,
+                                      scripture_study: current[entry.date]?.scripture_study ?? draft.scripture_study,
+                                      spiritual_notes: current[entry.date]?.spiritual_notes ?? draft.spiritual_notes,
+                                      photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
+                                    },
+                                  }))
+                                }
+                                placeholder="What felt good, generous, or worth appreciating today?"
+                                className="min-h-[180px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-fuchsia-400/50"
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <JournalPreviewBlock
+                              label="Journal entry"
+                              value={draft.journal_entry}
+                              query={journalQuery}
+                              placeholder="No journal entry saved for this day yet."
+                            />
+                            <JournalPreviewBlock
+                              label="Accomplishments"
+                              value={draft.accomplishments}
+                              query={journalQuery}
+                              placeholder="No accomplishments saved for this day yet."
+                            />
+                            <JournalPreviewBlock
+                              label="Gratitude"
+                              value={draft.gratitude_entry}
+                              query={journalQuery}
+                              placeholder="No gratitude saved for this day yet."
+                            />
+                          </>
+                        )}
                       </div>
 
                       <div className="flex justify-end">
-                        <Button
-                          className="rounded-2xl"
-                          onClick={() => void saveJournalEntry(entry.date)}
-                          disabled={journalSavingDate === entry.date}
-                        >
-                          {journalSavingDate === entry.date ? "Saving..." : "Save entry"}
-                        </Button>
+                        {isEditingJournalEntry ? (
+                          <Button
+                            className="rounded-2xl"
+                            onClick={() => void saveJournalEntry(entry.date)}
+                            disabled={journalSavingDate === entry.date}
+                          >
+                            {journalSavingDate === entry.date ? "Saving..." : "Save entry"}
+                          </Button>
+                        ) : null}
                       </div>
                     </CardContent>
                   </Card>

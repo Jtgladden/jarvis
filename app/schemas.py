@@ -403,3 +403,8 @@ class JournalDayEntry(BaseModel):
 class JournalResponse(BaseModel):
     generated_at: str
     entries: List[JournalDayEntry] = Field(default_factory=list)
+    total_entries: int = 0
+    has_more: bool = False
+    next_before: Optional[str] = None
+    saved_only: bool = False
+    query: str = ""

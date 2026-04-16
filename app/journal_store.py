@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 from contextlib import closing
+from datetime import datetime
 from threading import Lock
 
 from app.config import APP_DEFAULT_USER_ID
@@ -225,6 +226,164 @@ def list_journal_entries(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict[s
         }
         for row in rows
     }
+
+
+def _journal_search_clause(query: str) -> tuple[str, list[str]]:
+    trimmed_query = query.strip()
+    like_value = f"%{trimmed_query}%"
+    clause_parts = [
+        "entry_date LIKE ?",
+        "journal_entry LIKE ?",
+        "accomplishments LIKE ?",
+        "gratitude_entry LIKE ?",
+        "scripture_study LIKE ?",
+        "spiritual_notes LIKE ?",
+        "world_event_title LIKE ?",
+        "world_event_summary LIKE ?",
+        """
+        EXISTS (
+            SELECT 1
+            FROM json_each(journal_entries.calendar_items_json)
+            WHERE LOWER(COALESCE(json_extract(json_each.value, '$.title'), '')) LIKE LOWER(?)
+        )
+        """.strip(),
+    ]
+    params = [like_value] * len(clause_parts)
+
+    date_patterns: list[str] = []
+    normalized = " ".join(trimmed_query.replace(",", " ").split())
+    current_year = datetime.now().year
+    candidate_formats = [
+        ("%Y-%m-%d", True),
+        ("%B %d %Y", True),
+        ("%b %d %Y", True),
+        ("%B %d", False),
+        ("%b %d", False),
+        ("%m/%d/%Y", True),
+        ("%m/%d", False),
+        ("%m-%d-%Y", True),
+        ("%m-%d", False),
+    ]
+
+    for date_format, has_year in candidate_formats:
+        try:
+            parsed = datetime.strptime(normalized, date_format)
+        except ValueError:
+            continue
+
+        if has_year:
+            date_patterns.append(parsed.date().isoformat())
+        else:
+            date_patterns.append(f"%-{parsed.strftime('%m-%d')}")
+
+    exact_iso_dates: set[str] = set()
+    for date_pattern in dict.fromkeys(date_patterns):
+        clause_parts.append("entry_date LIKE ?")
+        params.append(date_pattern)
+        if not date_pattern.startswith("%-"):
+            exact_iso_dates.add(date_pattern)
+
+    if normalized:
+        for with_year in (
+            f"{normalized} {current_year}",
+            f"{normalized}, {current_year}",
+        ):
+            for date_format in ("%B %d %Y", "%b %d %Y"):
+                try:
+                    parsed = datetime.strptime(with_year, date_format)
+                except ValueError:
+                    continue
+                iso_date = parsed.date().isoformat()
+                if iso_date not in exact_iso_dates:
+                    clause_parts.append("entry_date = ?")
+                    params.append(iso_date)
+                    exact_iso_dates.add(iso_date)
+
+    return f"({' OR '.join(clause_parts)})", params
+
+
+def list_journal_entry_dates(
+    limit: int,
+    before_date: str | None = None,
+    query: str = "",
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> list[str]:
+    trimmed_query = query.strip()
+    where_clauses = ["user_id = ?"]
+    params: list[str | int] = [user_id]
+
+    if before_date:
+        where_clauses.append("entry_date < ?")
+        params.append(before_date)
+
+    if trimmed_query:
+        search_clause, search_params = _journal_search_clause(trimmed_query)
+        where_clauses.append(search_clause)
+        params.extend(search_params)
+
+    params.append(limit)
+
+    with _db_lock, closing(_connect()) as connection:
+        _ensure_journal_schema(connection)
+        _ensure_journal_columns(connection)
+        rows = connection.execute(
+            f"""
+            SELECT entry_date
+            FROM journal_entries
+            WHERE {' AND '.join(where_clauses)}
+            ORDER BY entry_date DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+
+    return [str(row["entry_date"]) for row in rows]
+
+
+def count_journal_entries(
+    query: str = "",
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> int:
+    trimmed_query = query.strip()
+    where_clauses = ["user_id = ?"]
+    params: list[str] = [user_id]
+
+    if trimmed_query:
+        search_clause, search_params = _journal_search_clause(trimmed_query)
+        where_clauses.append(search_clause)
+        params.extend(search_params)
+
+    with _db_lock, closing(_connect()) as connection:
+        _ensure_journal_schema(connection)
+        _ensure_journal_columns(connection)
+        row = connection.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM journal_entries
+            WHERE {' AND '.join(where_clauses)}
+            """,
+            params,
+        ).fetchone()
+
+    return int(row["total"]) if row else 0
+
+
+def get_oldest_journal_entry_date(user_id: str = APP_DEFAULT_USER_ID) -> str | None:
+    with _db_lock, closing(_connect()) as connection:
+        _ensure_journal_schema(connection)
+        _ensure_journal_columns(connection)
+        row = connection.execute(
+            """
+            SELECT entry_date
+            FROM journal_entries
+            WHERE user_id = ?
+            ORDER BY entry_date ASC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+
+    return str(row["entry_date"]) if row and row["entry_date"] else None
 
 
 def upsert_journal_entry(

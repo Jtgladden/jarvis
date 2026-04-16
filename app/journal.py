@@ -11,7 +11,14 @@ from openai import OpenAI
 
 from app.calendar_client import list_events_between
 from app.config import DEFAULT_TIMEZONE, OPENAI_API_KEY, OPENAI_PLANNING_MAX_TOKENS, OPENAI_PLANNING_MODEL, OPENAI_PLANNING_TIMEOUT_SECONDS
-from app.journal_store import list_journal_entries, upsert_journal_entry, upsert_journal_news
+from app.journal_store import (
+    count_journal_entries,
+    get_oldest_journal_entry_date,
+    list_journal_entries,
+    list_journal_entry_dates,
+    upsert_journal_entry,
+    upsert_journal_news,
+)
 from app.schemas import CalendarAgendaItem, JournalDayEntry, JournalNewsArticle, JournalResponse
 from app.user_context import get_default_user_context
 
@@ -491,16 +498,25 @@ def _fallback_calendar_summary(calendar_items: list[dict]) -> str:
     )
 
 
-def get_journal(days: int = 7) -> JournalResponse:
-    user_id = get_default_user_context().user_id
-    clamped_days = max(1, min(days, 30))
-    today_local = datetime.now(LOCAL_TIMEZONE).date()
-    start_day = today_local - timedelta(days=clamped_days - 1)
+def _date_label_from_key(day_key: str) -> str:
+    return _format_date_label(date.fromisoformat(day_key))
 
+
+def _build_journal_entries(
+    day_keys: list[str],
+    saved_entries: dict[str, dict[str, str | None]],
+    user_id: str,
+    today_local: date,
+) -> list[JournalDayEntry]:
+    if not day_keys:
+        return []
+
+    oldest_day = date.fromisoformat(day_keys[-1])
+    newest_day = date.fromisoformat(day_keys[0])
     agenda = list_events_between(
-        datetime.combine(start_day, time.min, tzinfo=LOCAL_TIMEZONE),
-        datetime.combine(today_local + timedelta(days=1), time.min, tzinfo=LOCAL_TIMEZONE),
-        max_results=500,
+        datetime.combine(oldest_day, time.min, tzinfo=LOCAL_TIMEZONE),
+        datetime.combine(newest_day + timedelta(days=1), time.min, tzinfo=LOCAL_TIMEZONE),
+        max_results=max(500, len(day_keys) * 20),
     )
 
     events_by_day: dict[str, list] = {}
@@ -508,11 +524,6 @@ def get_journal(days: int = 7) -> JournalResponse:
         day_key = (item.start or "")[:10]
         events_by_day.setdefault(day_key, []).append(item)
 
-    saved_entries = list_journal_entries(user_id=user_id)
-    day_keys = [
-        (today_local - timedelta(days=offset)).isoformat()
-        for offset in range(clamped_days)
-    ]
     try:
         saved_entries = _ensure_persisted_world_news(
             saved_entries=saved_entries,
@@ -522,10 +533,9 @@ def get_journal(days: int = 7) -> JournalResponse:
         )
     except Exception as exc:
         logger.warning("Journal news persistence failed: %s", exc)
-    base_entries: list[dict] = []
-    day = today_local
-    while day >= start_day:
-        day_key = day.isoformat()
+
+    base_entries: list[dict[str, Any]] = []
+    for day_key in day_keys:
         saved = saved_entries.get(day_key, {})
         calendar_items = _apply_calendar_overrides(
             events_by_day.get(day_key, []),
@@ -534,7 +544,7 @@ def get_journal(days: int = 7) -> JournalResponse:
         base_entries.append(
             {
                 "date": day_key,
-                "date_label": _format_date_label(day),
+                "date_label": _date_label_from_key(day_key),
                 "calendar_items": [_calendar_payload_for_day(item) for item in calendar_items if not item.removed],
                 "calendar_items_full": calendar_items,
                 "world_event_title": saved.get("world_event_title"),
@@ -544,7 +554,6 @@ def get_journal(days: int = 7) -> JournalResponse:
                 "world_event_articles": _parse_news_articles(saved.get("news_articles_json")),
             }
         )
-        day -= timedelta(days=1)
 
     ai_summaries = _ai_calendar_summaries(base_entries)
     entries: list[JournalDayEntry] = []
@@ -574,9 +583,75 @@ def get_journal(days: int = 7) -> JournalResponse:
             )
         )
 
+    return entries
+
+
+def get_journal(
+    days: int = 14,
+    before: str | None = None,
+    saved_only: bool = False,
+    query: str = "",
+) -> JournalResponse:
+    user_id = get_default_user_context().user_id
+    clamped_days = max(1, min(days, 60))
+    today_local = datetime.now(LOCAL_TIMEZONE).date()
+    saved_entries = list_journal_entries(user_id=user_id)
+    trimmed_query = query.strip()
+
+    if saved_only or trimmed_query:
+        date_rows = list_journal_entry_dates(
+            limit=clamped_days + 1,
+            before_date=before,
+            query=trimmed_query,
+            user_id=user_id,
+        )
+        has_more = len(date_rows) > clamped_days
+        day_keys = date_rows[:clamped_days]
+        next_before = day_keys[-1] if has_more and day_keys else None
+        total_entries = count_journal_entries(query=trimmed_query, user_id=user_id)
+        entries = _build_journal_entries(
+            day_keys=day_keys,
+            saved_entries=saved_entries,
+            user_id=user_id,
+            today_local=today_local,
+        )
+        return JournalResponse(
+            generated_at=datetime.now(LOCAL_TIMEZONE).isoformat(),
+            entries=entries,
+            total_entries=total_entries,
+            has_more=has_more,
+            next_before=next_before,
+            saved_only=True,
+            query=trimmed_query,
+        )
+
+    page_end = date.fromisoformat(before) if before else today_local
+    day_keys = [
+        (page_end - timedelta(days=offset)).isoformat()
+        for offset in range(clamped_days)
+    ]
+    entries = _build_journal_entries(
+        day_keys=day_keys,
+        saved_entries=saved_entries,
+        user_id=user_id,
+        today_local=today_local,
+    )
+    oldest_saved_date = get_oldest_journal_entry_date(user_id=user_id)
+    next_before = (
+        (date.fromisoformat(day_keys[-1]) - timedelta(days=1)).isoformat()
+        if day_keys
+        else None
+    )
+    has_more = bool(oldest_saved_date and next_before and oldest_saved_date <= next_before)
+
     return JournalResponse(
         generated_at=datetime.now(LOCAL_TIMEZONE).isoformat(),
         entries=entries,
+        total_entries=len(entries),
+        has_more=has_more,
+        next_before=next_before if has_more else None,
+        saved_only=False,
+        query="",
     )
 
 

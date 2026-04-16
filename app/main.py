@@ -308,8 +308,13 @@ def delete_task_route(task_id: str):
 
 
 @api.get("/journal", response_model=JournalResponse)
-def journal(days: int = Query(default=7, ge=1, le=30)):
-    return get_journal(days=days)
+def journal(
+    days: int = Query(default=14, ge=1, le=60),
+    before: str | None = Query(default=None),
+    saved_only: bool = Query(default=False),
+    query: str = Query(default=""),
+):
+    return get_journal(days=days, before=before, saved_only=saved_only, query=query)
 
 
 @api.put("/journal/{entry_date}", response_model=JournalDayEntry)
