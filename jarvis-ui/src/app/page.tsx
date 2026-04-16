@@ -472,6 +472,8 @@ type JournalDayEntry = {
   journal_entry: string;
   accomplishments: string;
   gratitude_entry: string;
+  scripture_study: string;
+  spiritual_notes: string;
   photo_data_url?: string | null;
   calendar_items: CalendarAgendaItem[];
   updated_at?: string | null;
@@ -486,6 +488,8 @@ type JournalDraft = {
   journal_entry: string;
   accomplishments: string;
   gratitude_entry: string;
+  scripture_study: string;
+  spiritual_notes: string;
   photo_data_url?: string | null;
   calendar_items: CalendarAgendaItem[];
 };
@@ -980,6 +984,8 @@ export default function HomePage() {
               journal_entry: entry.journal_entry || "",
               accomplishments: entry.accomplishments || "",
               gratitude_entry: entry.gratitude_entry || "",
+              scripture_study: entry.scripture_study || "",
+              spiritual_notes: entry.spiritual_notes || "",
               photo_data_url: entry.photo_data_url || null,
               calendar_items: entry.calendar_items || [],
             },
@@ -1029,6 +1035,8 @@ export default function HomePage() {
                       journal_entry: saved.journal_entry,
                       accomplishments: saved.accomplishments,
                       gratitude_entry: saved.gratitude_entry,
+                      scripture_study: saved.scripture_study,
+                      spiritual_notes: saved.spiritual_notes,
                       photo_data_url: saved.photo_data_url,
                       calendar_items: saved.calendar_items,
                       updated_at: saved.updated_at,
@@ -2438,6 +2446,8 @@ export default function HomePage() {
                   journal_entry: entry.journal_entry || "",
                   accomplishments: entry.accomplishments || "",
                   gratitude_entry: entry.gratitude_entry || "",
+                  scripture_study: entry.scripture_study || "",
+                  spiritual_notes: entry.spiritual_notes || "",
                   photo_data_url: entry.photo_data_url || null,
                   calendar_items: entry.calendar_items || [],
                 };
@@ -2471,6 +2481,7 @@ export default function HomePage() {
                     </CardHeader>
                     <CardContent className="space-y-5">
                       <div className="grid items-start gap-4 lg:grid-cols-2">
+                        <div className="space-y-4">
                         <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
                           <button
                             type="button"
@@ -2614,6 +2625,43 @@ export default function HomePage() {
                           ) : null}
                         </div>
 
+                        <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">
+                            Scripture / spiritual study
+                          </div>
+                          <div className="mt-3 space-y-3">
+                            <Input
+                              value={draft.scripture_study}
+                              onChange={(e) =>
+                                setJournalDrafts((current) => ({
+                                  ...current,
+                                  [entry.date]: {
+                                    ...draft,
+                                    scripture_study: e.target.value,
+                                  },
+                                }))
+                              }
+                              className="h-10 rounded-xl"
+                              placeholder="What did you study today?"
+                            />
+                            <textarea
+                              value={draft.spiritual_notes}
+                              onChange={(e) =>
+                                setJournalDrafts((current) => ({
+                                  ...current,
+                                  [entry.date]: {
+                                    ...draft,
+                                    spiritual_notes: e.target.value,
+                                  },
+                                }))
+                              }
+                              placeholder="Spiritual notes, impressions, questions, or insights."
+                              className="min-h-[132px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-300/40"
+                            />
+                          </div>
+                        </div>
+                        </div>
+
                         <div className="space-y-4">
                           <div className="rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
                             <div className="text-xs uppercase tracking-wide text-slate-400">
@@ -2752,6 +2800,8 @@ export default function HomePage() {
                                   journal_entry: e.target.value,
                                   accomplishments: current[entry.date]?.accomplishments ?? draft.accomplishments,
                                   gratitude_entry: current[entry.date]?.gratitude_entry ?? draft.gratitude_entry,
+                                  scripture_study: current[entry.date]?.scripture_study ?? draft.scripture_study,
+                                  spiritual_notes: current[entry.date]?.spiritual_notes ?? draft.spiritual_notes,
                                   photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
                                 },
                               }))
@@ -2775,6 +2825,8 @@ export default function HomePage() {
                                   journal_entry: current[entry.date]?.journal_entry ?? draft.journal_entry,
                                   accomplishments: e.target.value,
                                   gratitude_entry: current[entry.date]?.gratitude_entry ?? draft.gratitude_entry,
+                                  scripture_study: current[entry.date]?.scripture_study ?? draft.scripture_study,
+                                  spiritual_notes: current[entry.date]?.spiritual_notes ?? draft.spiritual_notes,
                                   photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
                                 },
                               }))
@@ -2798,6 +2850,8 @@ export default function HomePage() {
                                   journal_entry: current[entry.date]?.journal_entry ?? draft.journal_entry,
                                   accomplishments: current[entry.date]?.accomplishments ?? draft.accomplishments,
                                   gratitude_entry: e.target.value,
+                                  scripture_study: current[entry.date]?.scripture_study ?? draft.scripture_study,
+                                  spiritual_notes: current[entry.date]?.spiritual_notes ?? draft.spiritual_notes,
                                   photo_data_url: current[entry.date]?.photo_data_url ?? draft.photo_data_url,
                                 },
                               }))

@@ -343,6 +343,8 @@ class JournalDayNoteUpdateRequest(BaseModel):
     journal_entry: str = ""
     accomplishments: str = ""
     gratitude_entry: str = ""
+    scripture_study: str = ""
+    spiritual_notes: str = ""
     photo_data_url: Optional[str] = None
     calendar_items: List[CalendarAgendaItem] = Field(default_factory=list)
 
@@ -365,6 +367,8 @@ class JournalDayEntry(BaseModel):
     journal_entry: str = ""
     accomplishments: str = ""
     gratitude_entry: str = ""
+    scripture_study: str = ""
+    spiritual_notes: str = ""
     photo_data_url: Optional[str] = None
     calendar_items: List[CalendarAgendaItem] = Field(default_factory=list)
     updated_at: Optional[str] = None

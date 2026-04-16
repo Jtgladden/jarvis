@@ -295,6 +295,8 @@ def journal_save(entry_date: str, payload: JournalDayNoteUpdateRequest):
         journal_entry=payload.journal_entry,
         accomplishments=payload.accomplishments,
         gratitude_entry=payload.gratitude_entry,
+        scripture_study=payload.scripture_study,
+        spiritual_notes=payload.spiritual_notes,
         photo_data_url=payload.photo_data_url,
         calendar_items=payload.calendar_items,
     )
