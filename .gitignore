@@ -2,3 +2,5 @@ credentials.json
 app/__pycache__
 token.json
 .env
+data/classification_cache.db
+data/journal_entries.db
