@@ -18,9 +18,11 @@ RUN npm run build
 FROM node:22-alpine AS runner
 
 WORKDIR /app
+ARG NEXT_PUBLIC_API_BASE=/api
+ARG API_PROXY_TARGET=http://api:8000
 ENV NODE_ENV=production
-ENV NEXT_PUBLIC_API_BASE=/api
-ENV API_PROXY_TARGET=http://api:8000
+ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
+ENV API_PROXY_TARGET=$API_PROXY_TARGET
 
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/package-lock.json ./package-lock.json

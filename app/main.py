@@ -19,7 +19,9 @@ from app.journal import get_journal, save_journal_day
 from app.journal_store import init_journal_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse
+from app.schemas import CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest
+from app.task_service import create_task, delete_task, list_tasks, update_task
+from app.task_store import init_task_store
 from app.user_context import get_default_user_context
 
 app = FastAPI(title="Mail AI", version="0.1.0")
@@ -171,6 +173,7 @@ def start_background_new_mail_sorter() -> None:
     init_classification_cache()
     init_classification_guidance()
     init_journal_store()
+    init_task_store()
     thread = Thread(target=_new_mail_sort_loop, daemon=True)
     thread.start()
 
@@ -281,6 +284,27 @@ def classification_overview(
 @api.get("/dashboard", response_model=DashboardResponse)
 def dashboard():
     return generate_dashboard()
+
+
+@api.get("/tasks", response_model=TaskListResponse)
+def tasks(include_completed: bool = Query(default=True)):
+    return list_tasks(include_completed=include_completed)
+
+
+@api.post("/tasks", response_model=DashboardTaskItem)
+def create_task_route(payload: TaskCreateRequest):
+    return create_task(payload)
+
+
+@api.patch("/tasks/{task_id}", response_model=DashboardTaskItem)
+def update_task_route(task_id: str, payload: TaskUpdateRequest):
+    return update_task(task_id, payload)
+
+
+@api.delete("/tasks/{task_id}")
+def delete_task_route(task_id: str):
+    delete_task(task_id)
+    return {"deleted": True, "task_id": task_id}
 
 
 @api.get("/journal", response_model=JournalResponse)

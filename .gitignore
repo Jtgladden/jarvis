@@ -4,3 +4,4 @@ token.json
 .env
 data/classification_cache.db
 data/journal_entries.db
+data/tasks.db

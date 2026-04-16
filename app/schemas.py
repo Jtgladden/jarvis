@@ -320,10 +320,13 @@ class DashboardTaskItem(BaseModel):
     title: str
     detail: Optional[str] = None
     due_text: Optional[str] = None
-    source: Literal["mail", "calendar", "news", "planning"] = "mail"
+    source: Literal["mail", "calendar", "news", "planning", "custom"] = "mail"
     priority: Literal["high", "medium", "low"] = "medium"
     related_message_id: Optional[str] = None
     related_event_id: Optional[str] = None
+    completed: bool = False
+    updated_at: Optional[str] = None
+    custom: bool = False
 
 
 class DashboardResponse(BaseModel):
@@ -336,6 +339,29 @@ class DashboardResponse(BaseModel):
     calendar_items: List[CalendarAgendaItem] = Field(default_factory=list)
     important_emails: List[DashboardMailItem] = Field(default_factory=list)
     news_items: List[DashboardNewsItem] = Field(default_factory=list)
+    tasks: List[DashboardTaskItem] = Field(default_factory=list)
+
+
+class TaskCreateRequest(BaseModel):
+    title: str
+    detail: str = ""
+    due_text: Optional[str] = None
+    priority: Literal["high", "medium", "low"] = "medium"
+    source: Literal["mail", "calendar", "news", "planning", "custom"] = "custom"
+    related_message_id: Optional[str] = None
+    related_event_id: Optional[str] = None
+
+
+class TaskUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    detail: Optional[str] = None
+    due_text: Optional[str] = None
+    priority: Optional[Literal["high", "medium", "low"]] = None
+    completed: Optional[bool] = None
+
+
+class TaskListResponse(BaseModel):
+    generated_at: str
     tasks: List[DashboardTaskItem] = Field(default_factory=list)
 
 

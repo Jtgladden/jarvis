@@ -38,7 +38,6 @@ const LEGACY_UNIMPORTANT_LABELS = new Set([
 ]);
 const ALL_MAILBOX = "ALL";
 const DEFAULT_VISIBLE_MAILBOXES = new Set([
-  "INBOX",
   IMPORTANT_LABEL,
   UNIMPORTANT_LABEL,
   "Reviewed",
@@ -127,7 +126,7 @@ type ClassificationGuidance = {
 function normalizeOverview(data: Partial<ClassificationOverview>): ClassificationOverview {
   const legacyDeadlineExamples = (data as Partial<{ deadline_examples: ClassificationOverview["deadline_highlights"] }>).deadline_examples;
   return {
-    mailbox: data.mailbox || "INBOX",
+    mailbox: data.mailbox || ALL_MAILBOX,
     total_cached: data.total_cached || 0,
     needs_reply: data.needs_reply || 0,
     action_item_count: data.action_item_count || 0,
@@ -437,10 +436,13 @@ type DashboardTaskItem = {
   title: string;
   detail?: string | null;
   due_text?: string | null;
-  source: "mail" | "calendar" | "news" | "planning";
+  source: "mail" | "calendar" | "news" | "planning" | "custom";
   priority: "high" | "medium" | "low";
   related_message_id?: string | null;
   related_event_id?: string | null;
+  completed: boolean;
+  updated_at?: string | null;
+  custom: boolean;
 };
 
 type DashboardResponse = {
@@ -453,6 +455,11 @@ type DashboardResponse = {
   calendar_items: CalendarAgendaItem[];
   important_emails: DashboardMailItem[];
   news_items: DashboardNewsItem[];
+  tasks: DashboardTaskItem[];
+};
+
+type TaskListResponse = {
+  generated_at: string;
   tasks: DashboardTaskItem[];
 };
 
@@ -497,6 +504,16 @@ type JournalDraft = {
 type JournalSectionState = {
   calendarOpen: boolean;
   articlesOpen: boolean;
+};
+
+type TaskWindow = "today" | "this_week" | "next_week";
+
+type TaskDraft = {
+  title: string;
+  detail: string;
+  due_at: string;
+  due_note: string;
+  priority: "high" | "medium" | "low";
 };
 
 type AgendaDayGroup = {
@@ -739,6 +756,68 @@ function EmailListItem({
   );
 }
 
+function formatDateTimeLocalValue(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  const hours = String(value.getHours()).padStart(2, "0");
+  const minutes = String(value.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function buildTaskDraft(task: DashboardTaskItem): TaskDraft {
+  const parsed = parseCalendarDate(task.due_text);
+  return {
+    title: task.title,
+    detail: task.detail || "",
+    due_at: parsed ? formatDateTimeLocalValue(parsed) : "",
+    due_note: parsed ? "" : task.due_text || "",
+    priority: task.priority,
+  };
+}
+
+function getTaskDraftDueText(draft: TaskDraft) {
+  return draft.due_at || draft.due_note.trim() || null;
+}
+
+function startOfLocalDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function addLocalDays(value: Date, days: number) {
+  const next = new Date(value);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function startOfLocalWeek(value: Date) {
+  const start = startOfLocalDay(value);
+  start.setDate(start.getDate() - start.getDay());
+  return start;
+}
+
+function taskMatchesWindow(task: DashboardTaskItem, window: TaskWindow) {
+  const parsed = parseCalendarDate(task.due_text);
+  if (!parsed) return true;
+
+  const taskDay = startOfLocalDay(parsed);
+  const today = startOfLocalDay(new Date());
+
+  if (window === "today") {
+    return taskDay.getTime() === today.getTime();
+  }
+
+  const currentWeekStart = startOfLocalWeek(today);
+  const nextWeekStart = addLocalDays(currentWeekStart, 7);
+  const weekAfterNextStart = addLocalDays(nextWeekStart, 7);
+
+  if (window === "this_week") {
+    return taskDay >= currentWeekStart && taskDay < nextWeekStart;
+  }
+
+  return taskDay >= nextWeekStart && taskDay < weekAfterNextStart;
+}
+
 export default function HomePage() {
   const [emails, setEmails] = useState<Email[]>([]);
   const [rawNextPageToken, setRawNextPageToken] = useState<string | null>(null);
@@ -753,9 +832,22 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [mode, setMode] = useState<"dashboard" | "journal" | "mail" | "overview" | "schedule" | "planning">("dashboard");
+  const [mode, setMode] = useState<"dashboard" | "tasks" | "journal" | "mail" | "overview" | "schedule" | "planning">("dashboard");
   const [mailView, setMailView] = useState<"ai" | "raw">("ai");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
+  const [tasks, setTasks] = useState<DashboardTaskItem[]>([]);
+  const [taskDrafts, setTaskDrafts] = useState<Record<string, TaskDraft>>({});
+  const [taskSavingId, setTaskSavingId] = useState<string | null>(null);
+  const [taskEditingId, setTaskEditingId] = useState<string | null>(null);
+  const [taskDeletingId, setTaskDeletingId] = useState<string | null>(null);
+  const [calendarTaskLoadingId, setCalendarTaskLoadingId] = useState<string | null>(null);
+  const [taskCreateLoading, setTaskCreateLoading] = useState(false);
+  const [taskWindow, setTaskWindow] = useState<TaskWindow>("today");
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [newTaskDetail, setNewTaskDetail] = useState("");
+  const [newTaskDueAt, setNewTaskDueAt] = useState("");
+  const [newTaskDueNote, setNewTaskDueNote] = useState("");
+  const [newTaskPriority, setNewTaskPriority] = useState<"high" | "medium" | "low">("medium");
   const [journal, setJournal] = useState<JournalResponse | null>(null);
   const [journalDrafts, setJournalDrafts] = useState<Record<string, JournalDraft>>({});
   const [journalSectionState, setJournalSectionState] = useState<Record<string, JournalSectionState>>({});
@@ -767,8 +859,10 @@ export default function HomePage() {
   const [quickCalendarPrompt, setQuickCalendarPrompt] = useState("");
   const [quickCalendarLoading, setQuickCalendarLoading] = useState(false);
   const [quickCalendarResult, setQuickCalendarResult] = useState<CalendarQuickAddResponse | null>(null);
-  const [selectedMailbox, setSelectedMailbox] = useState<string>("INBOX");
+  const [selectedMailbox, setSelectedMailbox] = useState<string>(ALL_MAILBOX);
+  const [skipNextMailFetch, setSkipNextMailFetch] = useState(false);
   const [extraVisibleMailboxes, setExtraVisibleMailboxes] = useState<string[]>([]);
+  const [mailboxAddOpen, setMailboxAddOpen] = useState(false);
   const [inboxLimit, setInboxLimit] = useState("");
   const [cleanupSummary, setCleanupSummary] = useState<CleanupSummary | null>(null);
   const [cleanupLimit, setCleanupLimit] = useState("");
@@ -807,6 +901,14 @@ export default function HomePage() {
     setSelectedId(null);
   };
 
+  const syncTaskDrafts = (nextTasks: DashboardTaskItem[]) => {
+    setTaskDrafts(
+      Object.fromEntries(
+        nextTasks.map((task) => [task.id, buildTaskDraft(task)])
+      )
+    );
+  };
+
   const loadLabels = async () => {
     setLabelsLoading(true);
     try {
@@ -828,12 +930,12 @@ export default function HomePage() {
   };
 
   const loadEmails = async (
-    currentMode: "dashboard" | "journal" | "mail" | "overview" | "schedule" | "planning" = mode,
+    currentMode: "dashboard" | "tasks" | "journal" | "mail" | "overview" | "schedule" | "planning" = mode,
     mailboxOverride?: string,
     pageTokenOverride?: string | null,
     currentMailView: "ai" | "raw" = mailView
   ) => {
-    if (currentMode === "planning" || currentMode === "dashboard" || currentMode === "journal") {
+    if (currentMode === "planning" || currentMode === "dashboard" || currentMode === "tasks" || currentMode === "journal") {
       return;
     }
 
@@ -841,6 +943,28 @@ export default function HomePage() {
     setError("");
 
     try {
+      const targetMailbox = mailboxOverride ?? selectedMailbox;
+      const targetsAllMail = targetMailbox === ALL_MAILBOX;
+      if (currentMode === "overview" && targetsAllMail) {
+        setOverview(null);
+        setAgenda(null);
+        setEmails([]);
+        setCleanupSummary(null);
+        setCleanupJob(null);
+        setSelectedId(null);
+        setError("All Mail is browse-only. Pick a specific mailbox for AI overview.");
+        return;
+      }
+      if (currentMode === "mail" && currentMailView === "ai" && targetsAllMail) {
+        setOverview(null);
+        setAgenda(null);
+        setCleanupSummary(null);
+        setCleanupJob(null);
+        setError("All Mail is browse-only. AI summaries are disabled for it.");
+        setMailView("raw");
+        return;
+      }
+
       const trimmed = inboxLimit.trim();
       const limit = trimmed ? Number(trimmed) : NaN;
       const params = new URLSearchParams();
@@ -848,22 +972,22 @@ export default function HomePage() {
         const days = Number(scheduleDays);
         params.set("days", String(Number.isFinite(days) && days > 0 ? Math.floor(days) : 7));
       } else if (currentMode === "overview") {
-        params.set("mailbox", mailboxOverride ?? selectedMailbox);
+        params.set("mailbox", targetMailbox);
       } else if (currentMode === "mail" && currentMailView === "raw") {
         const pageSize =
           trimmed && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 50;
         params.set("limit", String(pageSize));
-        params.set("mailbox", mailboxOverride ?? selectedMailbox);
+        params.set("mailbox", targetMailbox);
         if (pageTokenOverride) {
           params.set("page_token", pageTokenOverride);
         }
       } else if (trimmed && Number.isFinite(limit) && limit > 0) {
         params.set("limit", String(Math.floor(limit)));
         params.set("bucket", classifiedBucket);
-        params.set("mailbox", mailboxOverride ?? selectedMailbox);
+        params.set("mailbox", targetMailbox);
       } else if (currentMode === "mail") {
         params.set("bucket", classifiedBucket);
-        params.set("mailbox", mailboxOverride ?? selectedMailbox);
+        params.set("mailbox", targetMailbox);
       }
       const endpoint =
         currentMode === "mail" && currentMailView === "ai"
@@ -948,6 +1072,7 @@ export default function HomePage() {
 
       const data: DashboardResponse = await response.json();
       setDashboard(data);
+      await loadTasks(false);
       setOverview(null);
       setAgenda(null);
       setEmails([]);
@@ -959,6 +1084,35 @@ export default function HomePage() {
       setError(message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadTasks = async (includeCompleted = true, showLoading = false) => {
+    if (showLoading) {
+      setLoading(true);
+    }
+    setError("");
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/tasks?include_completed=${includeCompleted ? "true" : "false"}`
+      );
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Tasks request failed with status ${response.status}`)
+        );
+      }
+
+      const data: TaskListResponse = await response.json();
+      setTasks(data.tasks);
+      syncTaskDrafts(data.tasks);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load tasks.";
+      setError(message);
+    } finally {
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   };
 
@@ -1102,6 +1256,168 @@ export default function HomePage() {
     reader.readAsDataURL(file);
   };
 
+  const saveTask = async (taskId: string, payload: Partial<TaskDraft> & { completed?: boolean }) => {
+    setTaskSavingId(taskId);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/tasks/${taskId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Task update failed with status ${response.status}`)
+        );
+      }
+
+      const saved: DashboardTaskItem = await response.json();
+      setTasks((current) => {
+        const next = current.some((task) => task.id === saved.id)
+          ? current.map((task) => (task.id === saved.id ? saved : task))
+          : [...current, saved];
+        return next;
+      });
+      setTaskDrafts((current) => ({
+        ...current,
+        [saved.id]: buildTaskDraft(saved),
+      }));
+      if (payload.completed === undefined) {
+        setTaskEditingId(null);
+      }
+      if (mode === "dashboard") {
+        await loadTasks(false);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to update task.";
+      setError(message);
+    } finally {
+      setTaskSavingId(null);
+    }
+  };
+
+  const deleteTask = async (taskId: string) => {
+    setTaskDeletingId(taskId);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/tasks/${taskId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Task delete failed with status ${response.status}`)
+        );
+      }
+
+      setTasks((current) => current.filter((task) => task.id !== taskId));
+      setTaskDrafts((current) => {
+        const next = { ...current };
+        delete next[taskId];
+        return next;
+      });
+      if (taskEditingId === taskId) {
+        setTaskEditingId(null);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to delete task.";
+      setError(message);
+    } finally {
+      setTaskDeletingId(null);
+    }
+  };
+
+  const createTaskFromCalendarItem = async (item: CalendarAgendaItem) => {
+    setCalendarTaskLoadingId(item.event_id);
+    setError("");
+    try {
+      const detailParts = [item.location, item.description].filter(Boolean);
+      const response = await fetch(`${API_BASE}/tasks`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: item.title,
+          detail: detailParts.join("\n\n"),
+          due_text: item.start || null,
+          priority: "medium",
+          source: "calendar",
+          related_event_id: item.event_id,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Task create failed with status ${response.status}`)
+        );
+      }
+
+      const created: DashboardTaskItem = await response.json();
+      setTasks((current) => {
+        const next = current.some((task) => task.id === created.id)
+          ? current.map((task) => (task.id === created.id ? created : task))
+          : [created, ...current];
+        return next;
+      });
+      setTaskDrafts((current) => ({
+        ...current,
+        [created.id]: buildTaskDraft(created),
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to create task from event.";
+      setError(message);
+    } finally {
+      setCalendarTaskLoadingId(null);
+    }
+  };
+
+  const createTaskItem = async () => {
+    if (!newTaskTitle.trim()) return;
+
+    setTaskCreateLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/tasks`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: newTaskTitle,
+          detail: newTaskDetail,
+          due_text: newTaskDueAt || newTaskDueNote.trim() || null,
+          priority: newTaskPriority,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(
+          await getErrorMessage(response, `Task create failed with status ${response.status}`)
+        );
+      }
+
+      const created: DashboardTaskItem = await response.json();
+      setTasks((current) => [created, ...current]);
+      setTaskDrafts((current) => ({
+        ...current,
+        [created.id]: buildTaskDraft(created),
+      }));
+      setNewTaskTitle("");
+      setNewTaskDetail("");
+      setNewTaskDueAt("");
+      setNewTaskDueNote("");
+      setNewTaskPriority("medium");
+      if (mode === "dashboard") {
+        await loadTasks(false);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to create task.";
+      setError(message);
+    } finally {
+      setTaskCreateLoading(false);
+    }
+  };
+
   const updateJournalCalendarItems = async (
     entryDate: string,
     updater: (items: CalendarAgendaItem[]) => CalendarAgendaItem[],
@@ -1127,7 +1443,7 @@ export default function HomePage() {
 
   const fetchEmailsEffect = useEffectEvent(
     (
-      currentMode: "dashboard" | "journal" | "mail" | "overview" | "schedule" | "planning",
+      currentMode: "dashboard" | "tasks" | "journal" | "mail" | "overview" | "schedule" | "planning",
       mailboxName?: string,
       currentMailView: "ai" | "raw" = mailView
     ) => {
@@ -1135,11 +1451,19 @@ export default function HomePage() {
         void loadDashboard();
         return;
       }
+      if (currentMode === "tasks") {
+        void loadTasks(true, true);
+        return;
+      }
       if (currentMode === "journal") {
         void loadJournal();
         return;
       }
       if (currentMode === "planning") {
+        return;
+      }
+      if (currentMode === "mail" && skipNextMailFetch) {
+        setSkipNextMailFetch(false);
         return;
       }
       void loadEmails(currentMode, mailboxName, undefined, currentMailView);
@@ -1547,6 +1871,8 @@ export default function HomePage() {
         classification: data.classification,
       };
 
+      setSkipNextMailFetch(true);
+      setSelectedMailbox(ALL_MAILBOX);
       setMode("mail");
       setMailView("ai");
       setOverview(null);
@@ -1754,6 +2080,23 @@ export default function HomePage() {
     });
   }, [emails, query]);
 
+  const activeTasks = useMemo(
+    () => tasks.filter((task) => !task.completed),
+    [tasks]
+  );
+  const completedTasks = useMemo(
+    () => tasks.filter((task) => task.completed),
+    [tasks]
+  );
+  const filteredActiveTasks = useMemo(
+    () => activeTasks.filter((task) => taskMatchesWindow(task, taskWindow)),
+    [activeTasks, taskWindow]
+  );
+  const filteredCompletedTasks = useMemo(
+    () => completedTasks.filter((task) => taskMatchesWindow(task, taskWindow)),
+    [completedTasks, taskWindow]
+  );
+
   const isMailMode = mode === "mail";
   const isAiMailView = isMailMode && mailView === "ai";
   const isRawMailView = isMailMode && mailView === "raw";
@@ -1853,7 +2196,7 @@ export default function HomePage() {
 
   const selectedMailboxLabel =
     mailboxLabels.find((label) => label.name === selectedMailbox) ||
-    visibleMailboxLabels.find((label) => label.name === "INBOX") ||
+    visibleMailboxLabels.find((label) => label.name === ALL_MAILBOX) ||
     null;
   const agendaDayGroups = useMemo(
     () => buildAgendaDayGroups(agenda?.items || []),
@@ -1902,6 +2245,186 @@ export default function HomePage() {
       add_label_names: [addLabelName],
       remove_label_names: removeLabelNames,
     });
+  };
+
+  const renderTaskCard = (task: DashboardTaskItem, compact = false) => {
+    const draft = taskDrafts[task.id] || buildTaskDraft(task);
+    const isEditing = taskEditingId === task.id;
+
+    return (
+      <div
+        key={task.id}
+        className={`rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] ${
+          compact ? "p-4" : "p-5"
+        }`}
+      >
+        {isEditing ? (
+          <div className="space-y-3">
+            <Input
+              value={draft.title}
+              onChange={(e) =>
+                setTaskDrafts((current) => ({
+                  ...current,
+                  [task.id]: { ...draft, title: e.target.value },
+                }))
+              }
+              className="rounded-xl"
+              placeholder="Task title"
+            />
+            <textarea
+              value={draft.detail}
+              onChange={(e) =>
+                setTaskDrafts((current) => ({
+                  ...current,
+                  [task.id]: { ...draft, detail: e.target.value },
+                }))
+              }
+              className="min-h-[96px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-300/40"
+              placeholder="Task details"
+            />
+            <div className="grid gap-3 md:grid-cols-[1fr_1fr_120px]">
+              <Input
+                type="datetime-local"
+                value={draft.due_at}
+                onChange={(e) =>
+                  setTaskDrafts((current) => ({
+                    ...current,
+                    [task.id]: { ...draft, due_at: e.target.value },
+                  }))
+                }
+                className="rounded-xl"
+              />
+              <Input
+                value={draft.due_note}
+                onChange={(e) =>
+                  setTaskDrafts((current) => ({
+                    ...current,
+                    [task.id]: { ...draft, due_note: e.target.value },
+                  }))
+                }
+                className="rounded-xl"
+                placeholder="Or a quick due note"
+              />
+              <select
+                value={draft.priority}
+                onChange={(e) =>
+                  setTaskDrafts((current) => ({
+                    ...current,
+                    [task.id]: {
+                      ...draft,
+                      priority: e.target.value as "high" | "medium" | "low",
+                    },
+                  }))
+                }
+                className="rounded-xl border border-white/8 bg-[rgba(20,22,37,0.88)] px-3 text-sm text-slate-100 outline-none"
+              >
+                <option value="high">high</option>
+                <option value="medium">medium</option>
+                <option value="low">low</option>
+              </select>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                className="rounded-2xl"
+                onClick={() =>
+                    void saveTask(task.id, {
+                      title: draft.title,
+                      detail: draft.detail,
+                      due_text: getTaskDraftDueText(draft),
+                      priority: draft.priority,
+                    })
+                }
+                disabled={taskSavingId === task.id}
+              >
+                {taskSavingId === task.id ? "Saving..." : "Save"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="rounded-2xl"
+                onClick={() => {
+                  setTaskDrafts((current) => ({
+                    ...current,
+                    [task.id]: buildTaskDraft(task),
+                  }));
+                  setTaskEditingId(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="rounded-2xl border-rose-400/30 text-rose-200 hover:bg-rose-500/10"
+                onClick={() => void deleteTask(task.id)}
+                disabled={taskDeletingId === task.id}
+              >
+                {taskDeletingId === task.id ? "Deleting..." : "Delete"}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className={`text-sm font-semibold ${task.completed ? "text-slate-400 line-through" : "text-slate-100"}`}>
+                  {task.title}
+                </div>
+                {task.detail ? (
+                  <div className="mt-1 text-sm text-slate-300">{task.detail}</div>
+                ) : null}
+                {task.due_text ? (
+                  <div className="mt-1 text-xs text-slate-400">
+                    {formatDashboardTaskDueText(task) || task.due_text}
+                  </div>
+                ) : null}
+              </div>
+              <Badge
+                variant={
+                  task.priority === "high"
+                    ? "default"
+                    : task.priority === "medium"
+                      ? "secondary"
+                      : "outline"
+                }
+                className="rounded-xl"
+              >
+                {task.priority}
+              </Badge>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                className="rounded-2xl"
+                variant={task.completed ? "outline" : "default"}
+                onClick={() => void saveTask(task.id, { completed: !task.completed })}
+                disabled={taskSavingId === task.id}
+              >
+                {task.completed ? "Reopen" : "Complete"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="rounded-2xl"
+                onClick={() => setTaskEditingId(task.id)}
+              >
+                Edit
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="rounded-2xl border-rose-400/30 text-rose-200 hover:bg-rose-500/10"
+                onClick={() => void deleteTask(task.id)}
+                disabled={taskDeletingId === task.id}
+              >
+                {taskDeletingId === task.id ? "Deleting..." : "Delete"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const utilitiesPanel = (
@@ -2081,6 +2604,8 @@ export default function HomePage() {
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
               {mode === "dashboard"
                 ? "Start here for a centralized briefing with your day, important mail, current headlines, and a focused task list."
+                : mode === "tasks"
+                ? "Review, edit, complete, and add tasks from one place."
                 : mode === "journal"
                 ? "Keep a lightweight daily journal with calendar-based summaries, a world event snapshot, and room for your own reflection."
                 : mode === "planning"
@@ -2097,6 +2622,15 @@ export default function HomePage() {
             >
               <Sparkles className="mr-2 h-4 w-4" />
               Dashboard
+            </Button>
+
+            <Button
+              variant={mode === "tasks" ? "default" : "outline"}
+              className="rounded-2xl"
+              onClick={() => setMode("tasks")}
+            >
+              <ShieldCheck className="mr-2 h-4 w-4" />
+              Tasks
             </Button>
 
             <Button
@@ -2120,7 +2654,13 @@ export default function HomePage() {
             <Button
               variant={mode === "overview" ? "default" : "outline"}
               className="rounded-2xl"
-              onClick={() => setMode("overview")}
+              onClick={() => {
+                if (selectedMailbox === ALL_MAILBOX) {
+                  setError("All Mail is browse-only. Pick a specific mailbox for AI overview.");
+                  return;
+                }
+                setMode("overview");
+              }}
             >
               <ShieldCheck className="mr-2 h-4 w-4" />
               Overview
@@ -2156,6 +2696,10 @@ export default function HomePage() {
                   void loadDashboard();
                   return;
                 }
+                if (mode === "tasks") {
+                  void loadTasks(true, true);
+                  return;
+                }
                 if (mode === "journal") {
                   void loadJournal();
                   return;
@@ -2176,7 +2720,7 @@ export default function HomePage() {
               Refresh
             </Button>
 
-            {mode !== "planning" && mode !== "dashboard" && mode !== "journal" ? (
+            {mode !== "planning" && mode !== "dashboard" && mode !== "tasks" && mode !== "journal" ? (
               <Input
                 type="number"
                 min="1"
@@ -2267,11 +2811,22 @@ export default function HomePage() {
                                   <div className="mt-1 text-xs text-slate-400">{item.location}</div>
                                 ) : null}
                               </div>
-                              <Badge variant="outline" className="rounded-xl">
-                                {item.is_all_day
-                                  ? `${formatRelativeDayLabel(item.start)} · All day`
-                                  : formatRelativeDayLabel(item.start)}
-                              </Badge>
+                              <div className="flex flex-col items-end gap-2">
+                                <Badge variant="outline" className="rounded-xl">
+                                  {item.is_all_day
+                                    ? `${formatRelativeDayLabel(item.start)} · All day`
+                                    : formatRelativeDayLabel(item.start)}
+                                </Badge>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="rounded-2xl"
+                                  onClick={() => void createTaskFromCalendarItem(item)}
+                                  disabled={calendarTaskLoadingId === item.event_id}
+                                >
+                                  {calendarTaskLoadingId === item.event_id ? "Adding..." : "Add task"}
+                                </Button>
+                              </div>
                             </div>
                           </div>
                         ))
@@ -2293,39 +2848,8 @@ export default function HomePage() {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-3">
-                      {dashboard?.tasks?.length ? (
-                        dashboard.tasks.map((task) => (
-                          <div
-                            key={task.id}
-                            className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4"
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0 flex-1">
-                                <div className="text-sm font-semibold text-slate-100">{task.title}</div>
-                                {task.detail ? (
-                                  <div className="mt-1 text-sm text-slate-300">{task.detail}</div>
-                                ) : null}
-                                {task.due_text ? (
-                                  <div className="mt-1 text-xs text-slate-400">
-                                    {formatDashboardTaskDueText(task)}
-                                  </div>
-                                ) : null}
-                              </div>
-                              <Badge
-                                variant={
-                                  task.priority === "high"
-                                    ? "default"
-                                    : task.priority === "medium"
-                                      ? "secondary"
-                                      : "outline"
-                                }
-                                className="rounded-xl"
-                              >
-                                {task.priority}
-                              </Badge>
-                            </div>
-                          </div>
-                        ))
+                      {activeTasks.length ? (
+                        activeTasks.map((task) => renderTaskCard(task, true))
                       ) : (
                         <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
                           {loading ? "Loading tasks..." : "No tasks surfaced yet."}
@@ -2425,6 +2949,139 @@ export default function HomePage() {
                     ) : (
                       <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
                         {loading ? "Loading news..." : "No news items available right now."}
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        ) : mode === "tasks" ? (
+          <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
+            <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <ShieldCheck className="h-5 w-5" />
+                  Add task
+                </CardTitle>
+                <p className="text-sm leading-6 text-slate-300">
+                  Create a task or clean up an existing one. Changes persist and also show up on the dashboard.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Input
+                  value={newTaskTitle}
+                  onChange={(e) => setNewTaskTitle(e.target.value)}
+                  className="rounded-xl"
+                  placeholder="Task title"
+                />
+                <textarea
+                  value={newTaskDetail}
+                  onChange={(e) => setNewTaskDetail(e.target.value)}
+                  className="min-h-[120px] w-full rounded-[1.2rem] border border-white/8 bg-[rgba(20,22,37,0.88)] px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-300/40"
+                  placeholder="Details or notes"
+                />
+                <div className="space-y-2">
+                  <div className="grid gap-3 md:grid-cols-[1fr_1fr_150px]">
+                    <Input
+                      type="datetime-local"
+                      value={newTaskDueAt}
+                      onChange={(e) => setNewTaskDueAt(e.target.value)}
+                      className="rounded-xl"
+                    />
+                    <Input
+                      value={newTaskDueNote}
+                      onChange={(e) => setNewTaskDueNote(e.target.value)}
+                      className="rounded-xl"
+                      placeholder="Or a quick due note"
+                    />
+                    <select
+                      value={newTaskPriority}
+                      onChange={(e) => setNewTaskPriority(e.target.value as "high" | "medium" | "low")}
+                      className="h-10 w-full rounded-xl border border-white/8 bg-[rgba(20,22,37,0.88)] px-3 text-sm text-slate-100 outline-none"
+                    >
+                      <option value="high">high priority</option>
+                      <option value="medium">medium priority</option>
+                      <option value="low">low priority</option>
+                    </select>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Pick an exact time when you have one, or leave a simple note like &quot;after class&quot;.
+                  </p>
+                </div>
+                <Button
+                  className="w-full rounded-2xl"
+                  onClick={() => void createTaskItem()}
+                  disabled={taskCreateLoading || !newTaskTitle.trim()}
+                >
+                  {taskCreateLoading ? "Creating..." : "Add task"}
+                </Button>
+              </CardContent>
+            </Card>
+
+            <div className="space-y-6">
+              <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                <CardHeader className="flex flex-col gap-4 pb-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-lg">
+                      <ShieldCheck className="h-5 w-5" />
+                      Active tasks
+                    </CardTitle>
+                    <p className="mt-2 text-sm text-slate-400">
+                      Undated tasks stay visible in every view so they do not disappear.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant={taskWindow === "today" ? "default" : "outline"}
+                      className="rounded-2xl"
+                      onClick={() => setTaskWindow("today")}
+                    >
+                      Today
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={taskWindow === "this_week" ? "default" : "outline"}
+                      className="rounded-2xl"
+                      onClick={() => setTaskWindow("this_week")}
+                    >
+                      This week
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={taskWindow === "next_week" ? "default" : "outline"}
+                      className="rounded-2xl"
+                      onClick={() => setTaskWindow("next_week")}
+                    >
+                      Next week
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {filteredActiveTasks.length ? (
+                      filteredActiveTasks.map((task) => renderTaskCard(task))
+                    ) : (
+                      <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                        {loading ? "Loading tasks..." : "No active tasks in this window."}
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">Completed</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {filteredCompletedTasks.length ? (
+                      filteredCompletedTasks.map((task) => renderTaskCard(task, true))
+                    ) : (
+                      <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                        No completed tasks in this window.
                       </div>
                     )}
                   </div>
@@ -3198,7 +3855,18 @@ export default function HomePage() {
                           }`}
                         >
                           <button
-                            onClick={() => setSelectedMailbox(label.name)}
+                            onClick={() => {
+                              setSelectedMailbox(label.name);
+                              if (label.name === ALL_MAILBOX) {
+                                if (mode === "mail" && mailView === "ai") {
+                                  setMailView("raw");
+                                }
+                                if (mode === "overview") {
+                                  setMode("mail");
+                                  setMailView("raw");
+                                }
+                              }
+                            }}
                             className={`flex min-w-0 w-full items-center justify-between overflow-hidden rounded-2xl border px-3 py-2 text-left transition ${
                               active
                                 ? "border-fuchsia-400/60 bg-[linear-gradient(135deg,rgba(189,147,249,0.22),rgba(40,42,54,0.95))] text-white shadow-[0_10px_28px_rgba(12,12,24,0.36)]"
@@ -3229,7 +3897,7 @@ export default function HomePage() {
                                   current.filter((name) => name !== label.name)
                                 );
                                 if (selectedMailbox === label.name) {
-                                  setSelectedMailbox("INBOX");
+                                  setSelectedMailbox(ALL_MAILBOX);
                                 }
                               }}
                             >
@@ -3243,29 +3911,42 @@ export default function HomePage() {
 
                   {hiddenMailboxLabels.length > 0 ? (
                     <div className="mt-4 space-y-2 border-t border-white/8 pt-4 pr-3">
-                      <div className="text-xs uppercase tracking-wide text-slate-400">
-                        Add To Sidebar
-                      </div>
-                      <div className="grid gap-2">
-                        {hiddenMailboxLabels.map((label) => (
-                          <Button
-                            key={label.id}
-                            size="sm"
-                            variant="outline"
-                            className="w-full min-w-0 justify-start overflow-hidden rounded-2xl"
-                            onClick={() =>
-                              setExtraVisibleMailboxes((current) =>
-                                current.includes(label.name) ? current : [...current, label.name]
-                              )
-                            }
-                          >
-                            <Plus className="mr-2 h-4 w-4 shrink-0" />
-                            <span className="min-w-0 truncate">
-                              {label.name === ALL_MAILBOX ? "All Mail" : label.name}
-                            </span>
-                          </Button>
-                        ))}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setMailboxAddOpen((current) => !current)}
+                        className="flex w-full items-center justify-between gap-3 text-left"
+                      >
+                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                          Add To Sidebar
+                        </div>
+                        {mailboxAddOpen ? (
+                          <ChevronDown className="h-4 w-4 text-slate-400" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-slate-400" />
+                        )}
+                      </button>
+                      {mailboxAddOpen ? (
+                        <div className="grid gap-2">
+                          {hiddenMailboxLabels.map((label) => (
+                            <Button
+                              key={label.id}
+                              size="sm"
+                              variant="outline"
+                              className="w-full min-w-0 justify-start overflow-hidden rounded-2xl"
+                              onClick={() =>
+                                setExtraVisibleMailboxes((current) =>
+                                  current.includes(label.name) ? current : [...current, label.name]
+                                )
+                              }
+                            >
+                              <Plus className="mr-2 h-4 w-4 shrink-0" />
+                              <span className="min-w-0 truncate">
+                                {label.name === ALL_MAILBOX ? "All Mail" : label.name}
+                              </span>
+                            </Button>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </ScrollArea>
@@ -3280,7 +3961,7 @@ export default function HomePage() {
                 {mode === "mail"
                   ? selectedMailboxLabel?.name === ALL_MAILBOX
                     ? "All Mail"
-                    : selectedMailboxLabel?.name || "Inbox"
+                    : selectedMailboxLabel?.name || "Mailbox"
                   : mode === "schedule"
                     ? "Schedule"
                   : mode === "overview"
@@ -3762,6 +4443,19 @@ export default function HomePage() {
                                       : "No end time"}
                                 </div>
                               </div>
+                            </div>
+                            <div className="mt-4">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="rounded-2xl"
+                                onClick={() => void createTaskFromCalendarItem(selectedAgendaEvent)}
+                                disabled={calendarTaskLoadingId === selectedAgendaEvent.event_id}
+                              >
+                                {calendarTaskLoadingId === selectedAgendaEvent.event_id
+                                  ? "Adding..."
+                                  : "Create task from event"}
+                              </Button>
                             </div>
                             {selectedAgendaEvent.location ? (
                               <div className="mt-4 text-sm text-slate-200">
