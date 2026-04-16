@@ -1818,6 +1818,9 @@ export default function HomePage() {
         return nextEmails;
       });
       await loadLabels();
+      if (dashboard) {
+        await loadDashboard();
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to mark email handled.";
       setError(message);

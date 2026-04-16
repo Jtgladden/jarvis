@@ -30,6 +30,17 @@ _dashboard_cache: dict[str, DashboardResponse] = {}
 _dashboard_cache_expires_at: dict[str, datetime] = {}
 
 
+def invalidate_dashboard_cache(user_id: str | None = None) -> None:
+    with _dashboard_cache_lock:
+        if user_id is None:
+            _dashboard_cache.clear()
+            _dashboard_cache_expires_at.clear()
+            return
+
+        _dashboard_cache.pop(user_id, None)
+        _dashboard_cache_expires_at.pop(user_id, None)
+
+
 def _parse_dashboard_date(value: str | None) -> datetime | date | None:
     if not value:
         return None

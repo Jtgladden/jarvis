@@ -13,7 +13,7 @@ from app.classification_cache import get_cached_classification, init_classificat
 from app.classification_guidance import get_classification_guidance, init_classification_guidance, update_classification_guidance
 from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, classify_cleanup_email, classify_email, classify_emails_batch, classify_new_email_ai_fallback
 from app.config import CORS_ALLOWED_ORIGINS, OPENAI_MAX_EMAILS_PER_RUN
-from app.dashboard import generate_dashboard
+from app.dashboard import generate_dashboard, invalidate_dashboard_cache
 from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_email_by_id, get_emails_by_any_label, get_mailbox_emails, get_mailbox_emails_page, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, update_email
 from app.journal import get_journal, save_journal_day
 from app.journal_store import init_journal_store
@@ -460,18 +460,22 @@ def apply_new_email_rules(
 
 @api.post("/emails/{message_id}/handle", response_model=HandleEmailResponse)
 def handle_email(message_id: str):
-    return mark_email_handled(message_id)
+    response = mark_email_handled(message_id)
+    invalidate_dashboard_cache(get_default_user_context().user_id)
+    return response
 
 
 @api.patch("/emails/{message_id}", response_model=EmailUpdateResponse)
 def patch_email(message_id: str, payload: EmailUpdateRequest):
-    return update_email(
+    response = update_email(
         message_id=message_id,
         add_label_names=payload.add_label_names,
         remove_label_names=payload.remove_label_names,
         archive=payload.archive,
         unread=payload.unread,
     )
+    invalidate_dashboard_cache(get_default_user_context().user_id)
+    return response
 
 
 app.include_router(api)
