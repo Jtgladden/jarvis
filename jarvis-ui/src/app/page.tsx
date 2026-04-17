@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import React, { useEffect, useEffectEvent, useMemo, useState } from "react";
+import React, { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Archive,
@@ -11,6 +11,7 @@ import {
   CalendarDays,
   ChevronDown,
   ChevronRight,
+  ExternalLink,
   Inbox,
   Mail,
   Newspaper,
@@ -77,6 +78,12 @@ type CleanupDecision = {
   reason: string;
 };
 
+type EmailLink = {
+  url: string;
+  label: string;
+  kind: "link" | "button";
+};
+
 type Email = {
   id: string;
   thread_id: string;
@@ -86,6 +93,7 @@ type Email = {
   date?: string;
   labels?: string[];
   body?: string;
+  links?: EmailLink[];
   classification?: Classification;
   cleanupDecision?: CleanupDecision;
 };
@@ -1021,6 +1029,7 @@ export default function HomePage() {
   const [planningCalendarLink, setPlanningCalendarLink] = useState<string | null>(null);
   const [planningBulkCalendarLoading, setPlanningBulkCalendarLoading] = useState(false);
   const [planningBulkCalendarMessage, setPlanningBulkCalendarMessage] = useState("");
+  const activePlanningJobIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2091,6 +2100,7 @@ export default function HomePage() {
       }
 
       const data: PlanningJobStartResponse = await response.json();
+      activePlanningJobIdRef.current = data.job_id;
       setPlanningJob({
         job_id: data.job_id,
         status: data.status,
@@ -2346,7 +2356,8 @@ export default function HomePage() {
 
     const poll = window.setInterval(async () => {
       try {
-        const response = await fetch(`${API_BASE}/planning/jobs/${planningJob.job_id}`);
+        const expectedJobId = planningJob.job_id;
+        const response = await fetch(`${API_BASE}/planning/jobs/${expectedJobId}`);
         if (!response.ok) {
           throw new Error(
             await getErrorMessage(
@@ -2357,6 +2368,9 @@ export default function HomePage() {
         }
 
         const data: PlanningJobStatus = await response.json();
+        if (activePlanningJobIdRef.current !== data.job_id || data.job_id !== expectedJobId) {
+          return;
+        }
         setPlanningJob(data);
 
         if (data.status === "completed" && data.result) {
@@ -5863,8 +5877,33 @@ export default function HomePage() {
                     <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
                       Body preview
                     </div>
-                    <div className="max-h-[40vh] overflow-auto whitespace-pre-wrap rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4 text-sm leading-6 text-slate-200">
-                      {decodeHtmlEntities(selectedEmail.body) || "No body text extracted."}
+                    <div className="max-h-[40vh] overflow-auto rounded-[1.6rem] border border-white/6 bg-[rgba(35,37,58,0.7)] p-4">
+                      <div className="whitespace-pre-wrap text-sm leading-6 text-slate-200">
+                        {decodeHtmlEntities(selectedEmail.body) || "No body text extracted."}
+                      </div>
+                      {selectedEmail.links?.length ? (
+                        <div className="mt-4 border-t border-white/8 pt-4">
+                          <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">
+                            Message links
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {selectedEmail.links.map((link, index) => (
+                              <Button
+                                key={`${link.url}-${index}`}
+                                asChild
+                                variant={link.kind === "button" ? "default" : "outline"}
+                                size="sm"
+                                className="rounded-2xl"
+                              >
+                                <a href={link.url} target="_blank" rel="noreferrer">
+                                  <ExternalLink className="mr-2 h-4 w-4" />
+                                  {decodeHtmlEntities(link.label) || "Open link"}
+                                </a>
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
 

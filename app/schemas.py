@@ -2,6 +2,12 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
 
 
+class EmailLink(BaseModel):
+    url: str
+    label: str
+    kind: Literal["link", "button"] = "link"
+
+
 class EmailSummary(BaseModel):
     id: str
     thread_id: str
@@ -11,6 +17,7 @@ class EmailSummary(BaseModel):
     date: Optional[str] = None
     labels: List[str] = Field(default_factory=list)
     body: Optional[str] = None
+    links: List[EmailLink] = Field(default_factory=list)
 
 
 class GmailLabel(BaseModel):

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
-import { ArrowLeft, Mail, RefreshCw } from "lucide-react";
+import { ArrowLeft, ExternalLink, Mail, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,6 +18,11 @@ type EmailDetail = {
   date?: string;
   labels?: string[];
   body?: string;
+  links?: Array<{
+    url: string;
+    label: string;
+    kind: "link" | "button";
+  }>;
   classification?: {
     short_summary?: string;
     why_it_matters?: string;
@@ -165,6 +170,26 @@ export default function MobileMailDetailPage({
               <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
                 <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Message body</div>
                 <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-200">{email.body}</div>
+                {email.links?.length ? (
+                  <div className="mt-4 border-t border-white/8 pt-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Message links</div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {email.links.map((link, index) => (
+                        <Button
+                          key={`${link.url}-${index}`}
+                          asChild
+                          variant={link.kind === "button" ? "default" : "outline"}
+                          className="rounded-2xl"
+                        >
+                          <a href={link.url} target="_blank" rel="noreferrer">
+                            <ExternalLink className="mr-2 h-4 w-4" />
+                            {link.label || "Open link"}
+                          </a>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 

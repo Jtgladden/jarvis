@@ -12,11 +12,13 @@ import {
   Mail,
   Plus,
   RefreshCw,
+  Search,
   Smartphone,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
 
@@ -193,6 +195,50 @@ function summarizeJournal(entry: JournalDayEntry) {
   );
 }
 
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getJournalSearchPatterns(query: string) {
+  const normalized = query.trim();
+  if (!normalized) return [];
+
+  return Array.from(
+    new Set(
+      [normalized, ...normalized.split(/\s+/)]
+        .map((part) => part.trim())
+        .filter((part) => part.length >= 2)
+    )
+  ).sort((left, right) => right.length - left.length);
+}
+
+function highlightJournalSearchText(
+  text: string | null | undefined,
+  query: string
+): React.ReactNode {
+  const value = text || "";
+  const patterns = getJournalSearchPatterns(query);
+  if (!value || !patterns.length) {
+    return value;
+  }
+
+  const matcher = new RegExp(`(${patterns.map(escapeRegex).join("|")})`, "gi");
+  const segments = value.split(matcher);
+
+  return segments.map((segment, index) =>
+    patterns.some((pattern) => segment.toLowerCase() === pattern.toLowerCase()) ? (
+      <mark
+        key={`${segment}-${index}`}
+        className="rounded-md bg-fuchsia-400/20 px-1 py-0.5 text-fuchsia-100 ring-1 ring-fuchsia-300/25"
+      >
+        {segment}
+      </mark>
+    ) : (
+      <React.Fragment key={`${segment}-${index}`}>{segment}</React.Fragment>
+    )
+  );
+}
+
 function MobilePageContent() {
   const [activeTab, setActiveTab] = useState<MobileTab>("today");
   const [mailView, setMailView] = useState<MobileMailView>("ai");
@@ -202,6 +248,8 @@ function MobilePageContent() {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [tasks, setTasks] = useState<DashboardTaskItem[]>([]);
   const [journal, setJournal] = useState<JournalDayEntry[]>([]);
+  const [journalQuery, setJournalQuery] = useState("");
+  const [journalSearchInput, setJournalSearchInput] = useState("");
   const [mailItems, setMailItems] = useState<Email[]>([]);
   const [schedule, setSchedule] = useState<CalendarAgendaItem[]>([]);
   const [handlingEmailId, setHandlingEmailId] = useState<string | null>(null);
@@ -211,6 +259,33 @@ function MobilePageContent() {
   const [newTaskDetail, setNewTaskDetail] = useState("");
   const searchParams = useSearchParams();
 
+  const loadJournal = async (query = "") => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const params = new URLSearchParams();
+      params.set("days", query.trim() ? "20" : "10");
+      if (query.trim()) {
+        params.set("query", query.trim());
+      }
+
+      const response = await fetch(`${API_BASE}/journal?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`Journal request failed with status ${response.status}`);
+      }
+
+      const data = (await response.json()) as JournalResponse;
+      setJournal(data.entries);
+      setJournalQuery(query.trim());
+      setJournalSearchInput(query);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load journal.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const loadAll = async () => {
     setLoading(true);
     setError("");
@@ -219,7 +294,7 @@ function MobilePageContent() {
       const [dashboardResponse, tasksResponse, journalResponse, scheduleResponse] = await Promise.all([
         fetch(`${API_BASE}/dashboard`),
         fetch(`${API_BASE}/tasks?include_completed=true`),
-        fetch(`${API_BASE}/journal?days=10`),
+        fetch(`${API_BASE}/journal?days=${journalQuery ? "20" : "10"}${journalQuery ? `&query=${encodeURIComponent(journalQuery)}` : ""}`),
         fetch(`${API_BASE}/calendar/schedule?days=7&max_results=24`),
       ]);
 
@@ -358,6 +433,15 @@ function MobilePageContent() {
     } finally {
       setCreatingTask(false);
     }
+  };
+
+  const applyJournalSearch = async () => {
+    await loadJournal(journalSearchInput);
+  };
+
+  const clearJournalSearch = async () => {
+    setJournalSearchInput("");
+    await loadJournal("");
   };
 
   const navItems: Array<{ key: MobileTab; label: string; icon: React.ReactNode }> = [
@@ -718,14 +802,54 @@ function MobilePageContent() {
 
         {activeTab === "journal" ? (
           <div className="space-y-4">
+            <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
+              <CardContent className="space-y-3 p-4">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <Input
+                    value={journalSearchInput}
+                    onChange={(e) => setJournalSearchInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void applyJournalSearch();
+                      }
+                    }}
+                    className="h-12 rounded-[1.1rem] pl-9"
+                    placeholder="Search journal days and reflections"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button className="flex-1 rounded-2xl" onClick={() => void applyJournalSearch()}>
+                    Search
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="rounded-2xl"
+                    onClick={() => void clearJournalSearch()}
+                    disabled={!journalQuery && !journalSearchInput}
+                  >
+                    Reset
+                  </Button>
+                </div>
+                <div className="text-xs leading-5 text-slate-400">
+                  {journalQuery
+                    ? `Showing ${journal.length} journal matches for "${journalQuery}".`
+                    : "Search dates, journal text, gratitude, and world events."}
+                </div>
+              </CardContent>
+            </Card>
+
             {journal.map((entry) => (
               <Card key={entry.date} className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
                 <CardHeader className="pb-2">
                   <Link href={`/mobile/journal/${entry.date}`} className="flex w-full items-start justify-between gap-3 text-left">
                     <div className="min-w-0">
-                      <CardTitle className="text-base">{entry.date_label}</CardTitle>
+                      <CardTitle className="text-base">
+                        {highlightJournalSearchText(entry.date_label, journalQuery)}
+                      </CardTitle>
                       <p className="mt-2 text-sm leading-6 text-slate-300">
-                        {summarizeJournal(entry)}
+                        {highlightJournalSearchText(summarizeJournal(entry), journalQuery)}
                       </p>
                     </div>
                     <ChevronRight className="mt-1 h-4 w-4 text-slate-400" />

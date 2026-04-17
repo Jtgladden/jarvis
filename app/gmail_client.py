@@ -1,7 +1,11 @@
 import base64
+import html
 import os.path
+import re
+from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from typing import Dict, List, Optional
 
 from google.auth.transport.requests import Request
@@ -13,7 +17,7 @@ from googleapiclient.errors import HttpError
 from app.classification_cache import update_cached_email
 from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIMPORTANT_LABELS, UNIMPORTANT_LABEL, canonicalize_importance_label
 from app.config import GMAIL_TOKEN_FILE, GMAIL_CREDENTIALS_FILE, GOOGLE_SCOPES
-from app.schemas import CleanupDecision, CleanupItem, CleanupResponse, CleanupSummary, EmailClassification, EmailPageResponse, EmailSummary, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleDecision, RuleItem, RuleProcessResponse, RuleSummary
+from app.schemas import CleanupDecision, CleanupItem, CleanupResponse, CleanupSummary, EmailClassification, EmailLink, EmailPageResponse, EmailSummary, EmailUpdateResponse, GmailLabel, HandleEmailResponse, RuleDecision, RuleItem, RuleProcessResponse, RuleSummary
 
 REVIEWED_LABEL = "Reviewed"
 ALL_IMPORTANCE_LABEL_NAMES = {
@@ -22,6 +26,138 @@ ALL_IMPORTANCE_LABEL_NAMES = {
     *LEGACY_IMPORTANT_LABELS,
     *LEGACY_UNIMPORTANT_LABELS,
 }
+
+_BLANK_LINE_RE = re.compile(r"\n{3,}")
+_SPACE_BEFORE_NEWLINE_RE = re.compile(r"[ \t]+\n")
+_HORIZONTAL_WHITESPACE_RE = re.compile(r"[^\S\n]+")
+_INVISIBLE_SPACER_RE = re.compile(r"[\u2800\u3164\ufeff]+")
+_PLAIN_TEXT_LINK_RE = re.compile(r"^<?((?:https?://|mailto:|tel:)[^>\s]+)>?$", re.IGNORECASE)
+_BLOCK_TAGS = {
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "caption",
+    "div",
+    "dl",
+    "dt",
+    "dd",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hr",
+    "li",
+    "main",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "table",
+    "td",
+    "th",
+    "tr",
+    "ul",
+}
+_SUPPORTED_LINK_SCHEMES = ("http://", "https://", "mailto:", "tel:")
+_BUTTON_HINTS = ("button", "btn", "cta", "action")
+
+
+@dataclass
+class _ParsedHtmlContent:
+    text: str = ""
+    links: list[EmailLink] = field(default_factory=list)
+
+
+@dataclass
+class _PayloadContent:
+    plain_text: str = ""
+    html_text: str = ""
+    links: list[EmailLink] = field(default_factory=list)
+
+
+class _EmailHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._text_parts: list[str] = []
+        self._links: list[EmailLink] = []
+        self._active_link: dict | None = None
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag_name = tag.lower()
+        attr_map = {name.lower(): (value or "") for name, value in attrs}
+
+        if tag_name in {"script", "style"}:
+            self._skip_depth += 1
+            return
+        if self._skip_depth:
+            return
+
+        if tag_name == "br":
+            self._text_parts.append("\n")
+        elif tag_name in _BLOCK_TAGS:
+            self._text_parts.append("\n\n")
+
+        if tag_name == "a":
+            href = html.unescape(attr_map.get("href", "")).strip()
+            if href:
+                self._active_link = {
+                    "url": href,
+                    "label_parts": [],
+                    "kind": "button" if _looks_like_button_anchor(attr_map) else "link",
+                }
+        elif tag_name == "button" and self._active_link is not None:
+            self._active_link["kind"] = "button"
+
+    def handle_endtag(self, tag: str) -> None:
+        tag_name = tag.lower()
+
+        if tag_name in {"script", "style"}:
+            if self._skip_depth:
+                self._skip_depth -= 1
+            return
+        if self._skip_depth:
+            return
+
+        if tag_name == "a" and self._active_link is not None:
+            raw_url = self._active_link["url"]
+            if _is_supported_link(raw_url):
+                label = _normalize_plain_text("".join(self._active_link["label_parts"]))
+                self._links.append(
+                    EmailLink(
+                        url=raw_url,
+                        label=label or _fallback_label_for_url(raw_url),
+                        kind=self._active_link["kind"],
+                    )
+                )
+            self._active_link = None
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth or not data:
+            return
+        self._text_parts.append(data)
+        if self._active_link is not None:
+            self._active_link["label_parts"].append(data)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def get_content(self) -> _ParsedHtmlContent:
+        return _ParsedHtmlContent(
+            text=_normalize_plain_text("".join(self._text_parts)),
+            links=_dedupe_email_links(self._links),
+        )
 
 
 def get_gmail_service():
@@ -92,23 +228,138 @@ def _decode_base64url(data: str) -> str:
     return decoded.decode("utf-8", errors="ignore")
 
 
-def _extract_text_from_payload(payload: dict) -> str:
+def _normalize_plain_text(value: str) -> str:
+    if not value:
+        return ""
+    value = value.replace("\r\n", "\n").replace("\r", "\n").replace("\xa0", " ")
+    value = _INVISIBLE_SPACER_RE.sub(" ", value)
+    value = _SPACE_BEFORE_NEWLINE_RE.sub("\n", value)
+    value = _HORIZONTAL_WHITESPACE_RE.sub(" ", value)
+    value = _BLANK_LINE_RE.sub("\n\n", value)
+    return value.strip()
+
+
+def _looks_like_button_anchor(attrs: dict[str, str]) -> bool:
+    searchable = " ".join(
+        attrs.get(name, "") for name in ("class", "id", "role", "aria-label", "title", "style")
+    ).lower()
+    return attrs.get("role", "").lower() == "button" or any(hint in searchable for hint in _BUTTON_HINTS)
+
+
+def _is_supported_link(url: str) -> bool:
+    normalized = url.strip().lower()
+    return normalized.startswith(_SUPPORTED_LINK_SCHEMES)
+
+
+def _fallback_label_for_url(url: str) -> str:
+    if url.lower().startswith("mailto:"):
+        return f"Email {url[7:]}"
+    if url.lower().startswith("tel:"):
+        return f"Call {url[4:]}"
+    return "Open link"
+
+
+def _dedupe_email_links(links: list[EmailLink], max_links: int = 12) -> list[EmailLink]:
+    deduped: list[EmailLink] = []
+    seen: dict[str, int] = {}
+
+    for link in links:
+        key = link.url.strip()
+        existing_index = seen.get(key)
+        if existing_index is not None:
+            existing = deduped[existing_index]
+            if existing.kind != "button" and link.kind == "button":
+                deduped[existing_index] = link
+            elif existing.label == "Open link" and link.label != "Open link":
+                deduped[existing_index] = link
+            continue
+
+        seen[key] = len(deduped)
+        deduped.append(link)
+        if len(deduped) >= max_links:
+            break
+
+    return deduped
+
+
+def _parse_html_content(value: str) -> _ParsedHtmlContent:
+    if not value:
+        return _ParsedHtmlContent()
+
+    parser = _EmailHTMLParser()
+    parser.feed(value)
+    parser.close()
+    return parser.get_content()
+
+
+def _looks_like_link_label(value: str) -> bool:
+    cleaned = _normalize_plain_text(value).strip(":- ")
+    if not cleaned or len(cleaned) > 40:
+        return False
+    if _PLAIN_TEXT_LINK_RE.match(cleaned):
+        return False
+    return not cleaned.endswith((".", "!", "?"))
+
+
+def _extract_plain_text_content(value: str) -> _PayloadContent:
+    normalized = _normalize_plain_text(value)
+    if not normalized:
+        return _PayloadContent()
+
+    lines = normalized.split("\n")
+    kept_lines: list[str] = []
+    links: list[EmailLink] = []
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        match = _PLAIN_TEXT_LINK_RE.match(line)
+        if not match:
+            kept_lines.append(raw_line)
+            continue
+
+        url = match.group(1).strip()
+        if not _is_supported_link(url):
+            kept_lines.append(raw_line)
+            continue
+
+        label = _fallback_label_for_url(url)
+        kind = "link"
+
+        previous = kept_lines[-1].strip() if kept_lines else ""
+        if previous and _looks_like_link_label(previous):
+            label = previous
+            kind = "button"
+            kept_lines.pop()
+
+        links.append(EmailLink(url=url, label=label, kind=kind))
+
+    body = _normalize_plain_text("\n".join(kept_lines))
+    return _PayloadContent(plain_text=body, links=_dedupe_email_links(links))
+
+
+def _extract_content_from_payload(payload: dict) -> _PayloadContent:
     mime_type = payload.get("mimeType", "")
     body = payload.get("body", {})
     data = body.get("data")
 
     if mime_type == "text/plain" and data:
-        return _decode_base64url(data)
+        return _extract_plain_text_content(_decode_base64url(data))
 
     if mime_type == "text/html" and data:
-        return _decode_base64url(data)
+        parsed_html = _parse_html_content(_decode_base64url(data))
+        return _PayloadContent(html_text=parsed_html.text, links=parsed_html.links)
 
+    collected = _PayloadContent()
     for part in payload.get("parts", []):
-        text = _extract_text_from_payload(part)
-        if text:
-            return text
+        part_content = _extract_content_from_payload(part)
+        if part_content.plain_text and not collected.plain_text:
+            collected.plain_text = part_content.plain_text
+        if part_content.html_text and not collected.html_text:
+            collected.html_text = part_content.html_text
+        if part_content.links and not collected.links:
+            collected.links = part_content.links
 
-    return ""
+    return collected
 
 
 def get_label_maps(service) -> tuple[Dict[str, str], Dict[str, str]]:
@@ -171,7 +422,8 @@ def _to_email_summary(full_msg: dict, label_id_to_name: Dict[str, str]) -> Email
     snippet = full_msg.get("snippet", "")
     label_ids = full_msg.get("labelIds", [])
     labels = [label_id_to_name.get(label_id, label_id) for label_id in label_ids]
-    body = _extract_text_from_payload(payload)
+    extracted = _extract_content_from_payload(payload)
+    body = extracted.plain_text or extracted.html_text
 
     return EmailSummary(
         id=full_msg["id"],
@@ -182,6 +434,7 @@ def _to_email_summary(full_msg: dict, label_id_to_name: Dict[str, str]) -> Email
         date=date,
         labels=labels,
         body=body[:5000] if body else None,
+        links=extracted.links,
     )
 
 
