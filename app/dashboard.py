@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from openai import OpenAI
 
 from app.calendar_client import list_upcoming_events
-from app.classification_cache import get_cached_classification, list_cached_classifications, save_classification
+from app.classification_cache import get_cached_classification, save_classification
 from app.classifier import IMPORTANT_LABEL, classify_email, classify_emails_batch
 from app.config import DASHBOARD_CACHE_TTL_SECONDS, DEFAULT_TIMEZONE, OPENAI_API_KEY, OPENAI_PLANNING_MAX_TOKENS, OPENAI_PLANNING_MODEL, OPENAI_PLANNING_TIMEOUT_SECONDS
 from app.gmail_client import get_mailbox_emails
@@ -113,38 +113,24 @@ def _fetch_news_items(limit: int = MAX_DASHBOARD_NEWS_ITEMS) -> list[DashboardNe
 
 def _recent_important_mail(limit: int = MAX_DASHBOARD_EMAILS) -> list[tuple[EmailSummary, Any]]:
     user_id = get_default_user_context().user_id
-    cached_items = list_cached_classifications(IMPORTANT_LABEL, limit=limit, user_id=user_id)
-    if len(cached_items) >= limit:
-        return cached_items[:limit]
-
-    seen_ids = {email.id for email, _ in cached_items}
     emails = get_mailbox_emails(mailbox=IMPORTANT_LABEL, limit=limit)
-
+    matched_items: list[tuple[EmailSummary, Any]] = []
     uncached_emails: list[EmailSummary] = []
 
     for email in emails:
-        if email.id in seen_ids:
-            continue
-
         cached = get_cached_classification(email, user_id=user_id)
         if cached is not None:
-            cached_items.append((email, cached.classification))
-            seen_ids.add(email.id)
-            if len(cached_items) >= limit:
-                break
+            matched_items.append((email, cached.classification))
             continue
 
         uncached_emails.append(email)
-        seen_ids.add(email.id)
 
     if uncached_emails:
         for email, classification in zip(uncached_emails, classify_emails_batch(uncached_emails)):
             save_classification(email, classification, user_id=user_id)
-            cached_items.append((email, classification))
-            if len(cached_items) >= limit:
-                break
+            matched_items.append((email, classification))
 
-    return cached_items[:limit]
+    return matched_items[:limit]
 
 
 def _build_mail_items(limit: int = MAX_DASHBOARD_EMAILS) -> list[DashboardMailItem]:
