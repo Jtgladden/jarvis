@@ -15,7 +15,8 @@ from app.classification_cache import get_cached_classification, save_classificat
 from app.classifier import IMPORTANT_LABEL, classify_email, classify_emails_batch
 from app.config import DASHBOARD_CACHE_TTL_SECONDS, DEFAULT_TIMEZONE, OPENAI_API_KEY, OPENAI_PLANNING_MAX_TOKENS, OPENAI_PLANNING_MODEL, OPENAI_PLANNING_TIMEOUT_SECONDS
 from app.gmail_client import get_mailbox_emails
-from app.schemas import DashboardMailItem, DashboardNewsItem, DashboardResponse, DashboardTaskItem, EmailSummary
+from app.health_store import get_health_dashboard_summary
+from app.schemas import DashboardHealthSummary, DashboardMailItem, DashboardNewsItem, DashboardResponse, DashboardTaskItem, EmailSummary
 from app.user_context import get_default_user_context
 
 logger = logging.getLogger(__name__)
@@ -228,14 +229,18 @@ def _fallback_dashboard_summary(
     mail_items: list[DashboardMailItem],
     news_items: list[DashboardNewsItem],
     tasks: list[DashboardTaskItem],
+    health_summary: DashboardHealthSummary | None,
 ) -> tuple[str, str, str, str]:
     next_event = calendar_items[0].title if calendar_items else "no major calendar events yet"
     top_mail = mail_items[0].subject if mail_items else "no urgent important email"
     top_news = news_items[0].title if news_items else "no news headlines available"
+    health_note = ""
+    if health_summary and health_summary.today_entry:
+        health_note = f" Health sync shows {health_summary.today_entry.steps} steps so far today."
 
     overview = (
         f"{date_label} centers on {next_event}, with {len(mail_items)} important emails and "
-        f"{len(tasks)} tasks surfaced for review."
+        f"{len(tasks)} tasks surfaced for review.{health_note}"
     )
     mail_summary = f"Top mail focus: {top_mail}."
     news_summary = f"Top headline: {top_news}."
@@ -252,9 +257,10 @@ def _ai_dashboard_summary(
     mail_items: list[DashboardMailItem],
     news_items: list[DashboardNewsItem],
     tasks: list[DashboardTaskItem],
+    health_summary: DashboardHealthSummary | None,
 ) -> tuple[str, str, str, str]:
     if not OPENAI_API_KEY:
-        return _fallback_dashboard_summary(date_label, calendar_items, mail_items, news_items, tasks)
+        return _fallback_dashboard_summary(date_label, calendar_items, mail_items, news_items, tasks, health_summary)
 
     system_prompt = """
 You are a concise personal daily dashboard assistant.
@@ -275,6 +281,7 @@ Keep it practical, specific, and calm. Do not invent facts outside the provided 
             "important_emails": [item.model_dump() for item in mail_items[:6]],
             "news_items": [item.model_dump() for item in news_items[:6]],
             "tasks": [item.model_dump() for item in tasks[:8]],
+            "health_summary": health_summary.model_dump() if health_summary else None,
         },
         ensure_ascii=True,
     )
@@ -299,7 +306,7 @@ Keep it practical, specific, and calm. Do not invent facts outside the provided 
         )
     except Exception as exc:
         logger.warning("Dashboard AI summary failed: %s", exc)
-        return _fallback_dashboard_summary(date_label, calendar_items, mail_items, news_items, tasks)
+        return _fallback_dashboard_summary(date_label, calendar_items, mail_items, news_items, tasks, health_summary)
 
 
 def generate_dashboard() -> DashboardResponse:
@@ -328,6 +335,7 @@ def generate_dashboard() -> DashboardResponse:
         calendar_items = []
 
     mail_items = _build_mail_items()
+    health_summary = get_health_dashboard_summary(user_id=user_id, today=today_local)
 
     try:
         news_items = _fetch_news_items()
@@ -337,7 +345,7 @@ def generate_dashboard() -> DashboardResponse:
 
     tasks = _build_tasks(calendar_items, mail_items)
     overview, mail_summary, news_summary, tasks_summary = _ai_dashboard_summary(
-        date_label, calendar_items, mail_items, news_items, tasks
+        date_label, calendar_items, mail_items, news_items, tasks, health_summary
     )
 
     response = DashboardResponse(
@@ -347,6 +355,7 @@ def generate_dashboard() -> DashboardResponse:
         mail_summary=mail_summary,
         news_summary=news_summary,
         tasks_summary=tasks_summary,
+        health_summary=health_summary,
         calendar_items=calendar_items,
         important_emails=mail_items,
         news_items=news_items,

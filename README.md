@@ -2,6 +2,14 @@
 
 Personal Gmail triage assistant with a FastAPI backend and a Next.js dashboard.
 
+## iOS companion app
+
+There is now a starter Apple Health companion app scaffold in [ios/README.md](/Users/jt_gladden/Dev/jarvis/ios/README.md).
+
+This is a SwiftUI + HealthKit starting point for requesting Apple Health permissions on-device before sending approved health summaries to the backend.
+
+The backend also supports daily health sync records through `POST /api/health/daily` and includes health summary data in the dashboard response.
+
 ## Docker deployment
 
 This repo is now packaged to run as two containers:

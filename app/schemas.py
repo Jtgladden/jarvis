@@ -336,6 +336,28 @@ class DashboardTaskItem(BaseModel):
     custom: bool = False
 
 
+class HealthDailyEntry(BaseModel):
+    date: str
+    source: str = "ios_healthkit"
+    steps: int = 0
+    active_energy_kcal: Optional[float] = None
+    sleep_hours: Optional[float] = None
+    workouts: int = 0
+    resting_heart_rate: Optional[float] = None
+    extra_metrics: dict[str, float | int | str | None] = Field(default_factory=dict)
+    synced_at: Optional[str] = None
+
+
+class DashboardHealthSummary(BaseModel):
+    latest_date: Optional[str] = None
+    last_synced_at: Optional[str] = None
+    today_entry: Optional[HealthDailyEntry] = None
+    recent_entries: List[HealthDailyEntry] = Field(default_factory=list)
+    seven_day_avg_steps: Optional[int] = None
+    seven_day_avg_sleep_hours: Optional[float] = None
+    streak_days: int = 0
+
+
 class DashboardResponse(BaseModel):
     generated_at: str
     date_label: str
@@ -343,6 +365,7 @@ class DashboardResponse(BaseModel):
     mail_summary: str = ""
     news_summary: str = ""
     tasks_summary: str = ""
+    health_summary: Optional[DashboardHealthSummary] = None
     calendar_items: List[CalendarAgendaItem] = Field(default_factory=list)
     important_emails: List[DashboardMailItem] = Field(default_factory=list)
     news_items: List[DashboardNewsItem] = Field(default_factory=list)
@@ -415,3 +438,23 @@ class JournalResponse(BaseModel):
     next_before: Optional[str] = None
     saved_only: bool = False
     query: str = ""
+
+
+class HealthDailySyncRequest(BaseModel):
+    date: Optional[str] = None
+    source: str = "ios_healthkit"
+    steps: int = 0
+    active_energy_kcal: Optional[float] = None
+    sleep_hours: Optional[float] = None
+    workouts: int = 0
+    resting_heart_rate: Optional[float] = None
+    extra_metrics: dict[str, float | int | str | None] = Field(default_factory=dict)
+
+
+class HealthDailySyncResponse(BaseModel):
+    saved: bool = True
+    entry: HealthDailyEntry
+
+
+class HealthListResponse(BaseModel):
+    entries: List[HealthDailyEntry] = Field(default_factory=list)

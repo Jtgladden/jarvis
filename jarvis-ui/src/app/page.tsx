@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import React, { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  Activity,
   Archive,
   BookOpen,
   CalendarDays,
@@ -229,6 +230,68 @@ function formatTaskSourceLabel(source: DashboardTaskItem["source"]) {
       return "Planning";
     default:
       return "Custom";
+  }
+}
+
+function formatHealthStat(value: number | null | undefined, digits = 0) {
+  if (value === null || value === undefined) return "--";
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+function healthMetricLabel(key: string) {
+  const labels: Record<string, string> = {
+    walking_running_distance_km: "Distance",
+    flights_climbed: "Flights climbed",
+    exercise_minutes: "Exercise",
+    stand_minutes: "Stand",
+    basal_energy_kcal: "Basal energy",
+    avg_heart_rate_bpm: "Avg heart rate",
+    latest_heart_rate_bpm: "Latest heart rate",
+    walking_heart_rate_avg_bpm: "Walking HR avg",
+    respiratory_rate_bpm: "Respiratory rate",
+    oxygen_saturation_percent: "Oxygen saturation",
+    hrv_sdnn_ms: "HRV",
+    vo2_max: "VO2 max",
+    body_mass_kg: "Weight",
+    body_fat_percentage: "Body fat",
+    body_mass_index: "BMI",
+    water_intake_ml: "Water",
+  };
+
+  return labels[key] || key.replaceAll("_", " ");
+}
+
+function formatHealthMetricValue(key: string, value: number | string | null | undefined) {
+  if (value === null || value === undefined) return "--";
+  if (typeof value === "string") return value;
+
+  switch (key) {
+    case "walking_running_distance_km":
+      return `${formatHealthStat(value, 2)} km`;
+    case "exercise_minutes":
+    case "stand_minutes":
+      return `${formatHealthStat(value)} min`;
+    case "basal_energy_kcal":
+      return `${formatHealthStat(value)} kcal`;
+    case "avg_heart_rate_bpm":
+    case "latest_heart_rate_bpm":
+    case "walking_heart_rate_avg_bpm":
+    case "respiratory_rate_bpm":
+      return `${formatHealthStat(value)} bpm`;
+    case "oxygen_saturation_percent":
+    case "body_fat_percentage":
+      return `${formatHealthStat(value)}%`;
+    case "hrv_sdnn_ms":
+      return `${formatHealthStat(value)} ms`;
+    case "body_mass_kg":
+      return `${formatHealthStat(value, 1)} kg`;
+    case "water_intake_ml":
+      return `${formatHealthStat(value)} mL`;
+    default:
+      return formatHealthStat(value, key === "vo2_max" || key === "body_mass_index" ? 1 : 0);
   }
 }
 
@@ -474,6 +537,28 @@ type DashboardTaskItem = {
   custom: boolean;
 };
 
+type HealthDailyEntry = {
+  date: string;
+  source: string;
+  steps: number;
+  active_energy_kcal?: number | null;
+  sleep_hours?: number | null;
+  workouts: number;
+  resting_heart_rate?: number | null;
+  extra_metrics: Record<string, number | string | null>;
+  synced_at?: string | null;
+};
+
+type DashboardHealthSummary = {
+  latest_date?: string | null;
+  last_synced_at?: string | null;
+  today_entry?: HealthDailyEntry | null;
+  recent_entries: HealthDailyEntry[];
+  seven_day_avg_steps?: number | null;
+  seven_day_avg_sleep_hours?: number | null;
+  streak_days: number;
+};
+
 type DashboardResponse = {
   generated_at: string;
   date_label: string;
@@ -481,6 +566,7 @@ type DashboardResponse = {
   mail_summary: string;
   news_summary: string;
   tasks_summary: string;
+  health_summary?: DashboardHealthSummary | null;
   calendar_items: CalendarAgendaItem[];
   important_emails: DashboardMailItem[];
   news_items: DashboardNewsItem[];
@@ -3182,7 +3268,7 @@ export default function HomePage() {
                       {dashboard?.overview || (loading ? "Building your dashboard..." : "Refresh to generate your daily overview.")}
                     </div>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                     <button
                       type="button"
                       onClick={() => {
@@ -3223,6 +3309,13 @@ export default function HomePage() {
                       <div className="mt-2 text-2xl font-semibold text-white">{dashboard?.calendar_items.length || 0}</div>
                       <div className="mt-2 text-xs text-cyan-100">Open schedule</div>
                     </button>
+                    <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4 text-left">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Health today</div>
+                      <div className="mt-2 text-2xl font-semibold text-white">
+                        {formatHealthStat(dashboard?.health_summary?.today_entry?.steps)}
+                      </div>
+                      <div className="mt-2 text-xs text-cyan-100">Steps from Apple Health</div>
+                    </div>
                   </div>
                   <div className="grid gap-4 md:grid-cols-3">
                     <button
@@ -3387,6 +3480,101 @@ export default function HomePage() {
             </div>
 
             <div className="space-y-6">
+              <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Activity className="h-5 w-5" />
+                    Health snapshot
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {dashboard?.health_summary ? (
+                    <div className="space-y-4">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">Today&apos;s steps</div>
+                          <div className="mt-2 text-2xl font-semibold text-white">
+                            {formatHealthStat(dashboard.health_summary.today_entry?.steps)}
+                          </div>
+                          <div className="mt-2 text-xs text-slate-400">
+                            7-day avg {formatHealthStat(dashboard.health_summary.seven_day_avg_steps)}
+                          </div>
+                        </div>
+                        <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">Active energy</div>
+                          <div className="mt-2 text-2xl font-semibold text-white">
+                            {formatHealthStat(dashboard.health_summary.today_entry?.active_energy_kcal)} kcal
+                          </div>
+                          <div className="mt-2 text-xs text-slate-400">
+                            {dashboard.health_summary.streak_days} day movement streak
+                          </div>
+                        </div>
+                      </div>
+                      <div className="rounded-[1.4rem] border border-cyan-300/15 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(35,37,58,0.85))] p-4">
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-cyan-100">
+                          <span>
+                            Latest sync {dashboard.health_summary.last_synced_at ? formatScheduleDateTime(dashboard.health_summary.last_synced_at) : "unknown"}
+                          </span>
+                          {dashboard.health_summary.latest_date ? (
+                            <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-2.5 py-1">
+                              Data date {dashboard.health_summary.latest_date}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-3 grid gap-2 text-sm text-slate-200 sm:grid-cols-3">
+                          <div>Sleep avg: {formatHealthStat(dashboard.health_summary.seven_day_avg_sleep_hours, 1)} hr</div>
+                          <div>Workouts today: {formatHealthStat(dashboard.health_summary.today_entry?.workouts)}</div>
+                          <div>Resting HR: {formatHealthStat(dashboard.health_summary.today_entry?.resting_heart_rate)} bpm</div>
+                        </div>
+                      </div>
+                      {dashboard.health_summary.today_entry?.extra_metrics &&
+                      Object.keys(dashboard.health_summary.today_entry.extra_metrics).length ? (
+                        <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">Expanded metrics</div>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            {Object.entries(dashboard.health_summary.today_entry.extra_metrics)
+                              .filter(([, value]) => value !== null && value !== undefined)
+                              .slice(0, 10)
+                              .map(([key, value]) => (
+                                <div
+                                  key={key}
+                                  className="rounded-[1rem] border border-white/6 bg-[rgba(17,19,34,0.45)] px-3 py-2"
+                                >
+                                  <div className="text-xs uppercase tracking-wide text-slate-400">
+                                    {healthMetricLabel(key)}
+                                  </div>
+                                  <div className="mt-1 text-sm font-medium text-slate-100">
+                                    {formatHealthMetricValue(key, value)}
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      <div className="space-y-2">
+                        {dashboard.health_summary.recent_entries.slice(-5).reverse().map((entry) => (
+                          <div
+                            key={entry.date}
+                            className="flex items-center justify-between rounded-[1.2rem] border border-white/6 bg-[rgba(35,37,58,0.72)] px-4 py-3 text-sm"
+                          >
+                            <div className="text-slate-300">{entry.date}</div>
+                            <div className="flex flex-wrap items-center gap-3 text-slate-100">
+                              <span>{formatHealthStat(entry.steps)} steps</span>
+                              <span>{formatHealthStat(entry.active_energy_kcal)} kcal</span>
+                              <span>{formatHealthStat(entry.workouts)} workouts</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-[1.6rem] border border-dashed border-white/10 p-6 text-sm text-slate-400">
+                      Sync from the iPhone companion app to start showing Apple Health data here.
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
               <Card className="rounded-[2rem] border border-white/8 bg-[rgba(17,19,34,0.82)] shadow-[0_16px_44px_rgba(6,7,14,0.36)] backdrop-blur-xl">
                 <CardHeader className="pb-3">
                   <CardTitle className="flex items-center gap-2 text-lg">

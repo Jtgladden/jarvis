@@ -15,11 +15,13 @@ from app.classifier import IMPORTANT_LABEL, LEGACY_IMPORTANT_LABELS, LEGACY_UNIM
 from app.config import CORS_ALLOWED_ORIGINS, OPENAI_MAX_EMAILS_PER_RUN
 from app.dashboard import generate_dashboard, invalidate_dashboard_cache
 from app.gmail_client import cleanup_inbox, expire_stale_important_emails, get_all_inbox_emails, get_email_by_id, get_emails_by_any_label, get_mailbox_emails, get_mailbox_emails_page, get_new_inbox_emails, get_recent_inbox_emails, list_gmail_labels, mark_email_handled, process_new_inbox_emails, update_email
+from app.health import list_health_entries, sync_health_daily_entry
+from app.health_store import init_health_store
 from app.journal import get_journal, get_journal_day, save_journal_day
 from app.journal_store import init_journal_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest
+from app.schemas import CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
 from app.user_context import get_default_user_context
@@ -174,6 +176,7 @@ def start_background_new_mail_sorter() -> None:
     init_classification_guidance()
     init_journal_store()
     init_task_store()
+    init_health_store()
     thread = Thread(target=_new_mail_sort_loop, daemon=True)
     thread.start()
 
@@ -284,6 +287,18 @@ def classification_overview(
 @api.get("/dashboard", response_model=DashboardResponse)
 def dashboard():
     return generate_dashboard()
+
+
+@api.get("/health", response_model=HealthListResponse)
+def health(days: int = Query(default=7, ge=1, le=30)):
+    return list_health_entries(days=days)
+
+
+@api.post("/health/daily", response_model=HealthDailySyncResponse)
+def sync_health_daily(payload: HealthDailySyncRequest):
+    response = sync_health_daily_entry(payload)
+    invalidate_dashboard_cache(get_default_user_context().user_id)
+    return response
 
 
 @api.get("/tasks", response_model=TaskListResponse)
