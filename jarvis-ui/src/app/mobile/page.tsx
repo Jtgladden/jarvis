@@ -404,6 +404,7 @@ function MobilePageContent() {
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskDetail, setNewTaskDetail] = useState("");
   const searchParams = useSearchParams();
+  const healthSummary = dashboard?.health_summary ?? null;
 
   const loadJournal = async (query = "") => {
     setLoading(true);
@@ -977,31 +978,31 @@ function MobilePageContent() {
               <CardContent className="space-y-4">
                 {dashboard?.health_summary || movementEntries.length ? (
                   <>
-                    {dashboard?.health_summary ? (
+                    {healthSummary ? (
                       <>
                         <div className="grid grid-cols-2 gap-3">
                           <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
                             <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Today&apos;s steps</div>
                             <div className="mt-2 text-2xl font-semibold text-white">
-                              {formatHealthStat(dashboard.health_summary.today_entry?.steps)}
+                              {formatHealthStat(healthSummary.today_entry?.steps)}
                             </div>
                             <div className="mt-2 text-xs text-slate-400">
-                              7-day avg {formatHealthStat(dashboard.health_summary.seven_day_avg_steps)}
+                              7-day avg {formatHealthStat(healthSummary.seven_day_avg_steps)}
                             </div>
                           </div>
                           <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
                             <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Sleep average</div>
                             <div className="mt-2 text-2xl font-semibold text-white">
-                              {formatHealthStat(dashboard.health_summary.seven_day_avg_sleep_hours, 1)} hr
+                              {formatHealthStat(healthSummary.seven_day_avg_sleep_hours, 1)} hr
                             </div>
                             <div className="mt-2 text-xs text-slate-400">
-                              Resting HR {formatHealthStat(dashboard.health_summary.today_entry?.resting_heart_rate)} bpm
+                              Resting HR {formatHealthStat(healthSummary.today_entry?.resting_heart_rate)} bpm
                             </div>
                           </div>
                         </div>
 
                         <div className="rounded-[1.2rem] border border-cyan-300/18 bg-cyan-400/8 px-4 py-3 text-sm leading-6 text-slate-200">
-                          {dashboard.health_summary.streak_days} day movement streak, {formatHealthStat(dashboard.health_summary.today_entry?.workouts)} workouts today, latest sync {dashboard.health_summary.last_synced_at ? formatScheduleDateTime(dashboard.health_summary.last_synced_at) : "unknown"}.
+                          {healthSummary.streak_days} day movement streak, {formatHealthStat(healthSummary.today_entry?.workouts)} workouts today, latest sync {healthSummary.last_synced_at ? formatScheduleDateTime(healthSummary.last_synced_at) : "unknown"}.
                         </div>
                       </>
                     ) : null}
@@ -1027,8 +1028,8 @@ function MobilePageContent() {
                       )}
                     </div>
 
-                    {dashboard?.health_summary?.today_entry?.extra_metrics &&
-                    Object.keys(dashboard.health_summary.today_entry.extra_metrics).length ? (
+                    {healthSummary?.today_entry?.extra_metrics &&
+                    Object.keys(healthSummary.today_entry.extra_metrics).length ? (
                       <div className="space-y-2">
                         <button
                           type="button"
@@ -1046,7 +1047,7 @@ function MobilePageContent() {
                           </span>
                         </button>
                         {expandedMetricsOpen
-                          ? Object.entries(dashboard.health_summary.today_entry.extra_metrics)
+                          ? Object.entries(healthSummary.today_entry.extra_metrics)
                               .filter(([, value]) => value !== null && value !== undefined)
                               .slice(0, 12)
                               .map(([key, value]) => (
@@ -1068,7 +1069,7 @@ function MobilePageContent() {
 
                     <div className="space-y-2">
                       <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Recent days</div>
-                      {dashboard.health_summary.recent_entries.slice().reverse().map((entry) => (
+                      {healthSummary?.recent_entries.slice().reverse().map((entry) => (
                         <div
                           key={entry.date}
                           className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3"
