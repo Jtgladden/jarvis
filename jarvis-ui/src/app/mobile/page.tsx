@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BookOpen,
   CalendarDays,
+  ChevronLeft,
   CheckCircle2,
   Ellipsis,
   ChevronRight,
@@ -26,6 +27,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
+const LIVE_MOVEMENT_REFRESH_MS = 15000;
+const KM_TO_MILES = 0.621371;
+const KG_TO_POUNDS = 2.20462;
+const ML_TO_FLUID_OUNCES = 0.033814;
 
 type MobileTab = "today" | "assistant" | "mail" | "tasks" | "journal" | "schedule" | "health" | "more";
 type MobileMailView = "ai" | "raw";
@@ -103,6 +108,10 @@ type DashboardHealthSummary = {
   seven_day_avg_steps?: number | null;
   seven_day_avg_sleep_hours?: number | null;
   streak_days: number;
+};
+
+type HealthListResponse = {
+  entries: HealthDailyEntry[];
 };
 
 type MovementDailyEntry = {
@@ -263,6 +272,32 @@ function parseCalendarDate(value: string | null | undefined) {
   return parsed;
 }
 
+function formatLocalDateKey(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function shiftLocalDateKey(value: string, offsetDays: number) {
+  const parsed = parseCalendarDate(value);
+  if (!parsed) return value;
+  const next = new Date(parsed);
+  next.setDate(next.getDate() + offsetDays);
+  return formatLocalDateKey(next);
+}
+
+function formatSelectedDayLabel(value: string | null | undefined) {
+  const parsed = parseCalendarDate(value);
+  if (!parsed) return "Selected day";
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(parsed);
+}
+
 function formatScheduleDateTime(value: string | null | undefined, isAllDay = false) {
   if (!value) return "Not scheduled";
   const parsed = parseCalendarDate(value);
@@ -280,6 +315,40 @@ function formatHealthStat(value: number | null | undefined, digits = 0) {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
+}
+
+function formatDistanceMiles(valueKm: number | null | undefined, digits = 1) {
+  if (valueKm === null || valueKm === undefined) return "--";
+  return `${formatHealthStat(valueKm * KM_TO_MILES, digits)} mi`;
+}
+
+function formatWeightPounds(valueKg: number | null | undefined, digits = 1) {
+  if (valueKg === null || valueKg === undefined) return "--";
+  return `${formatHealthStat(valueKg * KG_TO_POUNDS, digits)} lb`;
+}
+
+function formatWaterFluidOunces(valueMl: number | null | undefined, digits = 0) {
+  if (valueMl === null || valueMl === undefined) return "--";
+  return `${formatHealthStat(valueMl * ML_TO_FLUID_OUNCES, digits)} fl oz`;
+}
+
+function formatMovementStoryText(
+  story: string | null | undefined,
+  { selectedDate }: { selectedDate: string | null | undefined },
+) {
+  const trimmed = (story || "").trim();
+  if (!trimmed) return "No movement story generated yet.";
+
+  const todayKey = formatLocalDateKey(new Date());
+  const normalized = trimmed.replace(/(\d+(?:\.\d+)?)\s*km\b/gi, (_, value: string) =>
+    formatDistanceMiles(Number(value), 1)
+  );
+
+  if (selectedDate && selectedDate !== todayKey) {
+    return normalized.replace(/\btoday\b/gi, "that day");
+  }
+
+  return normalized;
 }
 
 function formatMinutes(value: number | null | undefined) {
@@ -437,12 +506,12 @@ function formatHealthMetricValue(key: string, value: number | string | null | un
 
   switch (key) {
     case "walking_running_distance_km":
-      return `${formatHealthStat(value, 2)} km`;
+      return formatDistanceMiles(value, 1);
     case "exercise_minutes":
     case "stand_minutes":
       return `${formatHealthStat(value)} min`;
     case "basal_energy_kcal":
-      return `${formatHealthStat(value)} kcal`;
+      return `${formatHealthStat(value)} Cal`;
     case "avg_heart_rate_bpm":
     case "latest_heart_rate_bpm":
     case "walking_heart_rate_avg_bpm":
@@ -454,9 +523,9 @@ function formatHealthMetricValue(key: string, value: number | string | null | un
     case "hrv_sdnn_ms":
       return `${formatHealthStat(value)} ms`;
     case "body_mass_kg":
-      return `${formatHealthStat(value, 1)} kg`;
+      return formatWeightPounds(value, 1);
     case "water_intake_ml":
-      return `${formatHealthStat(value)} mL`;
+      return formatWaterFluidOunces(value);
     default:
       return formatHealthStat(value, key === "vo2_max" || key === "body_mass_index" ? 1 : 0);
   }
@@ -523,6 +592,8 @@ function MobilePageContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
+  const [healthEntries, setHealthEntries] = useState<HealthDailyEntry[]>([]);
+  const [selectedHealthDate, setSelectedHealthDate] = useState<string | null>(null);
   const [movementEntries, setMovementEntries] = useState<MovementDailyEntry[]>([]);
   const [workoutEntries, setWorkoutEntries] = useState<WorkoutEntry[]>([]);
   const [expandedMetricsOpen, setExpandedMetricsOpen] = useState(false);
@@ -541,8 +612,17 @@ function MobilePageContent() {
   const healthSummary = dashboard?.health_summary ?? null;
   const hasLoadedJournalRef = useRef(false);
   const hasLoadedScheduleRef = useRef(false);
-  const latestMovementEntry = movementEntries[0] ?? null;
-  const mappedWorkoutEntries = workoutEntries.filter((workout) => workout.route_points.length > 1).slice(0, 1);
+  const latestHealthDate = healthEntries[0]?.date ?? healthSummary?.today_entry?.date ?? formatLocalDateKey(new Date());
+  const earliestHealthDate = healthEntries[healthEntries.length - 1]?.date ?? latestHealthDate;
+  const activeHealthDate = selectedHealthDate ?? latestHealthDate;
+  const selectedHealthEntry = healthEntries.find((entry) => entry.date === activeHealthDate)
+    ?? (healthSummary?.today_entry?.date === activeHealthDate ? healthSummary.today_entry : null);
+  const currentMovementEntry = movementEntries[0] ?? null;
+  const latestMovementEntry = movementEntries.find((entry) => entry.date === activeHealthDate) ?? null;
+  const mappedWorkoutEntries = workoutEntries.filter((workout) => {
+    const parsed = parseCalendarDate(workout.start_date);
+    return parsed ? formatLocalDateKey(parsed) === activeHealthDate && workout.route_points.length > 1 : false;
+  }).slice(0, 1);
   const movementStoryboard = latestMovementEntry ? buildMovementStoryboard(latestMovementEntry) : [];
   const movementRibbonSegments = latestMovementEntry ? buildMovementRibbonSegments(latestMovementEntry) : [];
   const hasMovementMap = Boolean(
@@ -602,9 +682,10 @@ function MobilePageContent() {
     setError("");
 
     try {
-      const [dashboardResponse, tasksResponse, movementResponse, journalResponse, workoutsResponse] = await Promise.all([
+      const [dashboardResponse, tasksResponse, healthResponse, movementResponse, journalResponse, workoutsResponse] = await Promise.all([
         fetch(`${API_BASE}/dashboard`),
         fetch(`${API_BASE}/tasks?include_completed=true`),
+        fetch(`${API_BASE}/health?days=3650`),
         fetch(`${API_BASE}/movement?days=14`),
         fetch(`${API_BASE}/journal?days=3`),
         fetch(`${API_BASE}/workouts?days=90&limit=30`),
@@ -623,6 +704,14 @@ function MobilePageContent() {
 
       setDashboard(dashboardData);
       setTasks(tasksData.tasks);
+      if (healthResponse.ok) {
+        const healthData = (await healthResponse.json()) as HealthListResponse;
+        const nextHealthEntries = [...healthData.entries].sort((left, right) => right.date.localeCompare(left.date));
+        setHealthEntries(nextHealthEntries);
+        setSelectedHealthDate((current) => current ?? nextHealthEntries[0]?.date ?? dashboardData.health_summary?.today_entry?.date ?? null);
+      } else {
+        setHealthEntries([]);
+      }
       if (movementResponse.ok) {
         const movementData = (await movementResponse.json()) as MovementListResponse;
         setMovementEntries(movementData.entries);
@@ -650,6 +739,39 @@ function MobilePageContent() {
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
+
+  const refreshLiveMovement = useEffectEvent(async () => {
+    try {
+      const [dashboardResponse, movementResponse] = await Promise.all([
+        fetch(`${API_BASE}/dashboard`, { cache: "no-store" }),
+        fetch(`${API_BASE}/movement?days=14`, { cache: "no-store" }),
+      ]);
+
+      if (dashboardResponse.ok) {
+        const dashboardData = (await dashboardResponse.json()) as DashboardResponse;
+        setDashboard(dashboardData);
+      }
+
+      if (movementResponse.ok) {
+        const movementData = (await movementResponse.json()) as MovementListResponse;
+        setMovementEntries(movementData.entries);
+      }
+    } catch {
+      // Ignore background refresh hiccups and keep the current mobile view stable.
+    }
+  });
+
+  useEffect(() => {
+    if (activeTab !== "today" && activeTab !== "health") {
+      return;
+    }
+
+    const poll = window.setInterval(() => {
+      void refreshLiveMovement();
+    }, LIVE_MOVEMENT_REFRESH_MS);
+
+    return () => window.clearInterval(poll);
+  }, [activeTab]);
 
   useEffect(() => {
     if (activeTab === "mail") {
@@ -713,7 +835,7 @@ function MobilePageContent() {
   );
   const todayStepCount = healthSummary?.today_entry?.steps ?? null;
   const todaySleepHours = healthSummary?.today_entry?.sleep_hours ?? healthSummary?.seven_day_avg_sleep_hours ?? null;
-  const todayDistanceKm = latestMovementEntry?.total_distance_km ?? null;
+  const todayDistanceKm = currentMovementEntry?.total_distance_km ?? null;
   const attentionItems = [
     featuredMail ? "mail" : null,
     nextCalendarItem ? "calendar" : null,
@@ -848,7 +970,7 @@ function MobilePageContent() {
               </div>
               <div className="rounded-[1.4rem] border border-white/8 bg-white/5 p-3">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Distance</div>
-                <div className="mt-2 text-2xl font-semibold text-white">{todayDistanceKm != null ? `${formatHealthStat(todayDistanceKm, 1)} km` : "--"}</div>
+                <div className="mt-2 text-2xl font-semibold text-white">{todayDistanceKm != null ? formatDistanceMiles(todayDistanceKm, 1) : "--"}</div>
               </div>
             </div>
 
@@ -1021,7 +1143,7 @@ function MobilePageContent() {
                   className="w-full rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 text-left"
                 >
                   <div className="text-sm font-medium text-white">
-                    {formatHealthStat(todayStepCount)} steps · {todayDistanceKm != null ? `${formatHealthStat(todayDistanceKm, 1)} km` : "--"}
+                    {formatHealthStat(todayStepCount)} steps · {todayDistanceKm != null ? formatDistanceMiles(todayDistanceKm, 1) : "--"}
                   </div>
                   <div className="mt-1 text-xs text-slate-400">
                     Sleep {formatHealthStat(todaySleepHours, 1)} hr · Resting HR {formatHealthStat(dashboard?.health_summary?.today_entry?.resting_heart_rate)} bpm
@@ -1293,16 +1415,48 @@ function MobilePageContent() {
                 <CardTitle className="text-lg">Body, workouts, and movement</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Selected day</div>
+                  <div className="mt-1 text-sm font-semibold text-white">{formatSelectedDayLabel(activeHealthDate)}</div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      className="rounded-2xl"
+                      onClick={() => setSelectedHealthDate(shiftLocalDateKey(activeHealthDate, -1))}
+                      disabled={activeHealthDate <= earliestHealthDate}
+                    >
+                      <ChevronLeft className="mr-2 h-4 w-4" />
+                      Previous
+                    </Button>
+                    <input
+                      type="date"
+                      value={activeHealthDate}
+                      min={earliestHealthDate}
+                      max={latestHealthDate}
+                      onChange={(event) => setSelectedHealthDate(event.target.value)}
+                      className="h-10 rounded-2xl border border-white/10 bg-[rgba(20,22,37,0.88)] px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/40"
+                    />
+                    <Button
+                      variant="outline"
+                      className="rounded-2xl"
+                      onClick={() => setSelectedHealthDate(shiftLocalDateKey(activeHealthDate, 1))}
+                      disabled={activeHealthDate >= latestHealthDate}
+                    >
+                      Next
+                      <ChevronRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
                 {dashboard?.health_summary || movementEntries.length ? (
                   <>
-                    {healthSummary ? (
+                    {selectedHealthEntry ? (
                       <>
                         <div className="rounded-[1.3rem] border border-cyan-300/18 bg-[linear-gradient(135deg,rgba(56,189,248,0.14),rgba(17,19,34,0.5))] p-4">
-                          <div className="text-[11px] uppercase tracking-[0.2em] text-cyan-100/80">Today&apos;s baseline</div>
+                          <div className="text-[11px] uppercase tracking-[0.2em] text-cyan-100/80">Day baseline</div>
                           <div className="mt-3 grid grid-cols-2 gap-3">
                             <div>
                               <div className="text-3xl font-semibold text-white">
-                                {formatHealthStat(healthSummary.today_entry?.steps)}
+                                {formatHealthStat(selectedHealthEntry.steps)}
                               </div>
                               <div className="mt-1 text-xs text-slate-300">steps</div>
                             </div>
@@ -1327,14 +1481,14 @@ function MobilePageContent() {
                           <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
                             <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Resting heart rate</div>
                             <div className="mt-2 text-2xl font-semibold text-white">
-                              {formatHealthStat(healthSummary.today_entry?.resting_heart_rate)}
+                              {formatHealthStat(selectedHealthEntry.resting_heart_rate)}
                             </div>
                             <div className="mt-2 text-xs text-slate-400">bpm</div>
                           </div>
                           <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
-                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Workouts today</div>
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Workouts logged</div>
                             <div className="mt-2 text-2xl font-semibold text-white">
-                              {formatHealthStat(healthSummary.today_entry?.workouts)}
+                              {formatHealthStat(selectedHealthEntry.workouts)}
                             </div>
                             <div className="mt-2 text-xs text-slate-400">logged sessions</div>
                           </div>
@@ -1347,17 +1501,19 @@ function MobilePageContent() {
                     ) : null}
 
                     <div className="rounded-[1.3rem] border border-emerald-300/18 bg-[linear-gradient(135deg,rgba(16,185,129,0.18),rgba(17,19,34,0.56))] px-4 py-4">
-                      <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/80">Movement today</div>
+                      <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/80">Movement story</div>
                       {latestMovementEntry ? (
                         <>
                           <div className="mt-2 text-base font-semibold text-white">
-                            {latestMovementEntry.movement_story || "No movement story generated yet."}
+                            {formatMovementStoryText(latestMovementEntry.movement_story, {
+                              selectedDate: activeHealthDate,
+                            })}
                           </div>
                           <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                             <div className="rounded-[0.9rem] border border-white/10 bg-black/10 px-2 py-2">
                               <div className="text-[10px] uppercase tracking-[0.16em] text-slate-300">Distance</div>
                               <div className="mt-1 text-sm font-semibold text-white">
-                                {formatHealthStat(latestMovementEntry.total_distance_km, 1)} km
+                                {formatDistanceMiles(latestMovementEntry.total_distance_km, 1)}
                               </div>
                             </div>
                             <div className="rounded-[0.9rem] border border-white/10 bg-black/10 px-2 py-2">
@@ -1433,8 +1589,8 @@ function MobilePageContent() {
                       </div>
                     ) : null}
 
-                    {healthSummary?.today_entry?.extra_metrics &&
-                    Object.keys(healthSummary.today_entry.extra_metrics).length ? (
+                    {selectedHealthEntry?.extra_metrics &&
+                    Object.keys(selectedHealthEntry.extra_metrics).length ? (
                       <div className="space-y-2">
                         <button
                           type="button"
@@ -1452,7 +1608,7 @@ function MobilePageContent() {
                           </span>
                         </button>
                         {expandedMetricsOpen
-                          ? Object.entries(healthSummary.today_entry.extra_metrics)
+                          ? Object.entries(selectedHealthEntry.extra_metrics)
                               .filter(([, value]) => value !== null && value !== undefined)
                               .slice(0, 12)
                               .map(([key, value]) => (
@@ -1487,8 +1643,8 @@ function MobilePageContent() {
                           {formatScheduleDateTime(workoutEntries[0].start_date)}
                         </div>
                         <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-300">
-                          <span>{formatHealthStat(workoutEntries[0].total_distance_km, 1)} km</span>
-                          <span>{formatHealthStat(workoutEntries[0].active_energy_kcal)} kcal</span>
+                          <span>{formatDistanceMiles(workoutEntries[0].total_distance_km, 1)}</span>
+                          <span>{formatHealthStat(workoutEntries[0].active_energy_kcal)} Cal</span>
                           <span>{formatHealthStat(workoutEntries[0].avg_heart_rate_bpm)} avg bpm</span>
                         </div>
                       </div>
@@ -1502,7 +1658,7 @@ function MobilePageContent() {
                             <div className="mt-1 text-sm font-medium text-white">{formatWorkoutLabel(mappedWorkoutEntries[0].activity_label)}</div>
                           </div>
                           <div className="text-[11px] text-slate-400">
-                            {formatHealthStat(mappedWorkoutEntries[0].total_distance_km, 1)} km
+                            {formatDistanceMiles(mappedWorkoutEntries[0].total_distance_km, 1)}
                           </div>
                         </div>
                         <div className="mt-3 overflow-hidden rounded-[1rem] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.12),transparent_32%),linear-gradient(180deg,rgba(9,12,22,0.96),rgba(15,18,28,0.96))]">

@@ -331,7 +331,7 @@ def assistant_delete_chat(chat_id: str):
 
 
 @api.get("/health", response_model=HealthListResponse)
-def health(days: int = Query(default=7, ge=1, le=30)):
+def health(days: int = Query(default=7, ge=1, le=3650)):
     return list_health_entries(days=days)
 
 
@@ -349,7 +349,9 @@ def movement(days: int = Query(default=14, ge=1, le=60)):
 
 @api.post("/movement/daily", response_model=MovementDailySyncResponse)
 def sync_movement_daily(payload: MovementDailySyncRequest):
-    return sync_movement_daily_entry(payload)
+    response = sync_movement_daily_entry(payload)
+    invalidate_dashboard_cache(get_default_user_context().user_id)
+    return response
 
 
 @api.get("/workouts", response_model=WorkoutListResponse)

@@ -10,6 +10,7 @@ import {
   Archive,
   BookOpen,
   CalendarDays,
+  ChevronLeft,
   ChevronDown,
   ChevronRight,
   ExternalLink,
@@ -36,6 +37,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
 const IMPORTANT_LABEL = "Jarvis Important";
 const UNIMPORTANT_LABEL = "Jarvis Unimportant";
+const LIVE_MOVEMENT_REFRESH_MS = 15000;
+const KM_TO_MILES = 0.621371;
+const KG_TO_POUNDS = 2.20462;
+const ML_TO_FLUID_OUNCES = 0.033814;
 const LEGACY_IMPORTANT_LABELS = new Set(["Important", "AI Important", "Rules Important"]);
 const LEGACY_UNIMPORTANT_LABELS = new Set([
   "Unimportant",
@@ -176,6 +181,25 @@ function formatLocalDateKey(value: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function shiftLocalDateKey(value: string, offsetDays: number) {
+  const parsed = parseCalendarDate(value);
+  if (!parsed) return value;
+  const next = new Date(parsed);
+  next.setDate(next.getDate() + offsetDays);
+  return formatLocalDateKey(next);
+}
+
+function formatSelectedDayLabel(value: string | null | undefined) {
+  const parsed = parseCalendarDate(value);
+  if (!parsed) return "Selected day";
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(parsed);
+}
+
 function isSameLocalDay(left: Date, right: Date) {
   return (
     left.getFullYear() === right.getFullYear() &&
@@ -243,6 +267,40 @@ function formatHealthStat(value: number | null | undefined, digits = 0) {
   });
 }
 
+function formatDistanceMiles(valueKm: number | null | undefined, digits = 1) {
+  if (valueKm === null || valueKm === undefined) return "--";
+  return `${formatHealthStat(valueKm * KM_TO_MILES, digits)} mi`;
+}
+
+function formatWeightPounds(valueKg: number | null | undefined, digits = 1) {
+  if (valueKg === null || valueKg === undefined) return "--";
+  return `${formatHealthStat(valueKg * KG_TO_POUNDS, digits)} lb`;
+}
+
+function formatWaterFluidOunces(valueMl: number | null | undefined, digits = 0) {
+  if (valueMl === null || valueMl === undefined) return "--";
+  return `${formatHealthStat(valueMl * ML_TO_FLUID_OUNCES, digits)} fl oz`;
+}
+
+function formatMovementStoryText(
+  story: string | null | undefined,
+  { selectedDate }: { selectedDate: string | null | undefined },
+) {
+  const trimmed = (story || "").trim();
+  if (!trimmed) return "No movement story generated yet.";
+
+  const todayKey = formatLocalDateKey(new Date());
+  const normalized = trimmed.replace(/(\d+(?:\.\d+)?)\s*km\b/gi, (_, value: string) =>
+    formatDistanceMiles(Number(value), 1)
+  );
+
+  if (selectedDate && selectedDate !== todayKey) {
+    return normalized.replace(/\btoday\b/gi, "that day");
+  }
+
+  return normalized;
+}
+
 function formatMinutes(value: number | null | undefined) {
   if (value === null || value === undefined) return "--";
   if (value < 60) return `${formatHealthStat(value)} min`;
@@ -281,12 +339,12 @@ function formatHealthMetricValue(key: string, value: number | string | null | un
 
   switch (key) {
     case "walking_running_distance_km":
-      return `${formatHealthStat(value, 2)} km`;
+      return formatDistanceMiles(value, 1);
     case "exercise_minutes":
     case "stand_minutes":
       return `${formatHealthStat(value)} min`;
     case "basal_energy_kcal":
-      return `${formatHealthStat(value)} kcal`;
+      return `${formatHealthStat(value)} Cal`;
     case "avg_heart_rate_bpm":
     case "latest_heart_rate_bpm":
     case "walking_heart_rate_avg_bpm":
@@ -298,9 +356,9 @@ function formatHealthMetricValue(key: string, value: number | string | null | un
     case "hrv_sdnn_ms":
       return `${formatHealthStat(value)} ms`;
     case "body_mass_kg":
-      return `${formatHealthStat(value, 1)} kg`;
+      return formatWeightPounds(value, 1);
     case "water_intake_ml":
-      return `${formatHealthStat(value)} mL`;
+      return formatWaterFluidOunces(value);
     default:
       return formatHealthStat(value, key === "vo2_max" || key === "body_mass_index" ? 1 : 0);
   }
@@ -704,6 +762,10 @@ type DashboardHealthSummary = {
   streak_days: number;
 };
 
+type HealthListResponse = {
+  entries: HealthDailyEntry[];
+};
+
 type MovementVisit = {
   arrival?: string | null;
   departure?: string | null;
@@ -787,6 +849,9 @@ type DashboardResponse = {
 
 function HealthDetailPanel({
   dashboard,
+  healthEntries,
+  selectedHealthDate,
+  onSelectedHealthDateChange,
   movementEntries,
   workoutEntries,
   movementLoading,
@@ -794,6 +859,9 @@ function HealthDetailPanel({
   onBackToDashboard,
 }: {
   dashboard: DashboardResponse | null;
+  healthEntries: HealthDailyEntry[];
+  selectedHealthDate: string | null;
+  onSelectedHealthDateChange: (value: string) => void;
   movementEntries: MovementDailyEntry[];
   workoutEntries: WorkoutEntry[];
   movementLoading: boolean;
@@ -801,14 +869,23 @@ function HealthDetailPanel({
   onBackToDashboard?: () => void;
 }) {
   const healthSummary = dashboard?.health_summary ?? null;
-  const latestMovementEntry = movementEntries[0] ?? null;
   const [expandedMetricsOpen, setExpandedMetricsOpen] = useState(false);
-  const movementStoryboard = latestMovementEntry ? buildMovementStoryboard(latestMovementEntry) : [];
-  const movementRibbonSegments = latestMovementEntry ? buildMovementRibbonSegments(latestMovementEntry) : [];
-  const mappedWorkouts = workoutEntries.filter((workout) => workout.route_points.length > 1).slice(0, 2);
-  const featuredWorkout = workoutEntries[0] ?? null;
+  const latestHealthDate = healthEntries[0]?.date ?? healthSummary?.today_entry?.date ?? formatLocalDateKey(new Date());
+  const earliestHealthDate = healthEntries[healthEntries.length - 1]?.date ?? latestHealthDate;
+  const activeHealthDate = selectedHealthDate ?? latestHealthDate;
+  const selectedHealthEntry = healthEntries.find((entry) => entry.date === activeHealthDate)
+    ?? (healthSummary?.today_entry?.date === activeHealthDate ? healthSummary.today_entry : null);
+  const selectedMovementEntry = movementEntries.find((entry) => entry.date === activeHealthDate) ?? null;
+  const selectedWorkoutEntries = workoutEntries.filter((workout) => {
+    const parsed = parseCalendarDate(workout.start_date);
+    return parsed ? formatLocalDateKey(parsed) === activeHealthDate : false;
+  });
+  const movementStoryboard = selectedMovementEntry ? buildMovementStoryboard(selectedMovementEntry) : [];
+  const movementRibbonSegments = selectedMovementEntry ? buildMovementRibbonSegments(selectedMovementEntry) : [];
+  const mappedWorkouts = selectedWorkoutEntries.filter((workout) => workout.route_points.length > 1).slice(0, 2);
+  const featuredWorkout = selectedWorkoutEntries[0] ?? null;
   const hasMovementMap = Boolean(
-    latestMovementEntry && (latestMovementEntry.route_points.length || latestMovementEntry.visits.length)
+    selectedMovementEntry && (selectedMovementEntry.route_points.length || selectedMovementEntry.visits.length)
   );
 
   return (
@@ -834,16 +911,53 @@ function HealthDetailPanel({
               </Button>
             ) : null}
           </div>
+          <div className="flex flex-col gap-3 rounded-[1.4rem] border border-white/8 bg-white/5 p-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Selected day</div>
+              <div className="mt-1 text-base font-semibold text-white">{formatSelectedDayLabel(activeHealthDate)}</div>
+              <div className="mt-1 text-xs text-slate-400">
+                Use the arrows for day-by-day review or jump with the calendar.
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                className="rounded-2xl"
+                onClick={() => onSelectedHealthDateChange(shiftLocalDateKey(activeHealthDate, -1))}
+                disabled={activeHealthDate <= earliestHealthDate}
+              >
+                <ChevronLeft className="mr-2 h-4 w-4" />
+                Previous day
+              </Button>
+              <input
+                type="date"
+                value={activeHealthDate}
+                min={earliestHealthDate}
+                max={latestHealthDate}
+                onChange={(event) => onSelectedHealthDateChange(event.target.value)}
+                className="h-10 rounded-2xl border border-white/10 bg-[rgba(20,22,37,0.88)] px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/40"
+              />
+              <Button
+                variant="outline"
+                className="rounded-2xl"
+                onClick={() => onSelectedHealthDateChange(shiftLocalDateKey(activeHealthDate, 1))}
+                disabled={activeHealthDate >= latestHealthDate}
+              >
+                Next day
+                <ChevronRight className="ml-2 h-4 w-4" />
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
-          {healthSummary || latestMovementEntry ? (
+          {selectedHealthEntry || selectedMovementEntry ? (
             <div className="space-y-5">
               {healthSummary ? (
                 <div className="grid gap-3 xl:grid-cols-[1.35fr_0.85fr_0.85fr_0.95fr]">
                   <div className="rounded-[1.6rem] border border-cyan-300/16 bg-[linear-gradient(135deg,rgba(37,99,235,0.16),rgba(17,19,34,0.64))] p-5">
-                    <div className="text-xs uppercase tracking-[0.2em] text-cyan-100/80">Today&apos;s baseline</div>
+                    <div className="text-xs uppercase tracking-[0.2em] text-cyan-100/80">Day baseline</div>
                     <div className="mt-3 text-3xl font-semibold text-white">
-                      {formatHealthStat(healthSummary.today_entry?.steps)}
+                      {formatHealthStat(selectedHealthEntry?.steps)}
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2 text-xs text-cyan-100">
                       <span className="rounded-full border border-cyan-300/25 bg-black/10 px-3 py-1">
@@ -857,7 +971,7 @@ function HealthDetailPanel({
                   <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                     <div className="text-xs uppercase tracking-wide text-slate-400">Active energy</div>
                     <div className="mt-2 text-2xl font-semibold text-white">
-                      {formatHealthStat(healthSummary.today_entry?.active_energy_kcal)} kcal
+                      {formatHealthStat(selectedHealthEntry?.active_energy_kcal)} Cal
                     </div>
                     <div className="mt-2 text-xs text-slate-400">
                       {healthSummary.streak_days} day movement streak
@@ -869,13 +983,13 @@ function HealthDetailPanel({
                       {formatHealthStat(healthSummary.seven_day_avg_sleep_hours, 1)} hr
                     </div>
                     <div className="mt-2 text-xs text-slate-400">
-                      Workouts today {formatHealthStat(healthSummary.today_entry?.workouts)}
+                      Workouts logged {formatHealthStat(selectedHealthEntry?.workouts)}
                     </div>
                   </div>
                   <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                     <div className="text-xs uppercase tracking-wide text-slate-400">Resting heart rate</div>
                     <div className="mt-2 text-2xl font-semibold text-white">
-                      {formatHealthStat(healthSummary.today_entry?.resting_heart_rate)} bpm
+                      {formatHealthStat(selectedHealthEntry?.resting_heart_rate)} bpm
                     </div>
                     <div className="mt-2 text-xs text-slate-400">
                       Latest sync {healthSummary.last_synced_at ? formatScheduleDateTime(healthSummary.last_synced_at) : "unknown"}
@@ -899,8 +1013,8 @@ function HealthDetailPanel({
                 </div>
               ) : null}
 
-              {healthSummary?.today_entry?.extra_metrics &&
-              Object.keys(healthSummary.today_entry.extra_metrics).length ? (
+              {selectedHealthEntry?.extra_metrics &&
+              Object.keys(selectedHealthEntry.extra_metrics).length ? (
                 <div className="rounded-[1.5rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                   <button
                     type="button"
@@ -919,7 +1033,7 @@ function HealthDetailPanel({
                   </button>
                   {expandedMetricsOpen ? (
                     <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                      {Object.entries(healthSummary.today_entry.extra_metrics)
+                      {Object.entries(selectedHealthEntry.extra_metrics)
                         .filter(([, value]) => value !== null && value !== undefined)
                         .map(([key, value]) => (
                           <div
@@ -957,8 +1071,8 @@ function HealthDetailPanel({
                         </div>
                         <div className="flex flex-wrap gap-3 text-xs text-slate-300">
                           <span>{formatHealthStat(featuredWorkout.duration_minutes, 0)} min</span>
-                          <span>{formatHealthStat(featuredWorkout.total_distance_km, 1)} km</span>
-                          <span>{formatHealthStat(featuredWorkout.active_energy_kcal)} kcal</span>
+                          <span>{formatDistanceMiles(featuredWorkout.total_distance_km, 1)}</span>
+                          <span>{formatHealthStat(featuredWorkout.active_energy_kcal)} Cal</span>
                           <span>{formatHealthStat(featuredWorkout.avg_heart_rate_bpm)} avg bpm</span>
                         </div>
                       </div>
@@ -992,7 +1106,7 @@ function HealthDetailPanel({
                               <div className="mt-1 text-sm font-medium text-slate-100">{formatWorkoutLabel(workout.activity_label)}</div>
                             </div>
                             <div className="text-xs text-slate-400">
-                              {formatHealthStat(workout.total_distance_km, 1)} km
+                              {formatDistanceMiles(workout.total_distance_km, 1)}
                             </div>
                           </div>
                           <MovementMap entry={workoutToMapEntry(workout)} className="h-[320px]" />
@@ -1023,30 +1137,32 @@ function HealthDetailPanel({
                   </p>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {latestMovementEntry ? (
+                  {selectedMovementEntry ? (
                     <>
                       <div className="rounded-[1.5rem] border border-emerald-300/15 bg-[linear-gradient(135deg,rgba(16,185,129,0.16),rgba(14,18,30,0.92))] p-5">
-                        <div className="text-xs uppercase tracking-[0.22em] text-emerald-100/80">Today&apos;s movement story</div>
+                        <div className="text-xs uppercase tracking-[0.22em] text-emerald-100/80">Movement story</div>
                         <div className="mt-3 text-lg font-semibold text-white">
-                          {latestMovementEntry.movement_story || "No movement story generated yet."}
+                          {formatMovementStoryText(selectedMovementEntry.movement_story, {
+                            selectedDate: activeHealthDate,
+                          })}
                         </div>
                         <div className="mt-4 grid gap-3 md:grid-cols-3">
                           <div className="rounded-[1.1rem] border border-white/8 bg-black/10 px-4 py-3">
                             <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">Distance</div>
                             <div className="mt-1 text-xl font-semibold text-white">
-                              {formatHealthStat(latestMovementEntry.total_distance_km, 1)} km
+                              {formatDistanceMiles(selectedMovementEntry.total_distance_km, 1)}
                             </div>
                           </div>
                           <div className="rounded-[1.1rem] border border-white/8 bg-black/10 px-4 py-3">
                             <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">Away from home</div>
                             <div className="mt-1 text-xl font-semibold text-white">
-                              {formatMinutes(latestMovementEntry.time_away_minutes)}
+                              {formatMinutes(selectedMovementEntry.time_away_minutes)}
                             </div>
                           </div>
                           <div className="rounded-[1.1rem] border border-white/8 bg-black/10 px-4 py-3">
                             <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300">Visited places</div>
                             <div className="mt-1 text-xl font-semibold text-white">
-                              {latestMovementEntry.visited_places_count}
+                              {selectedMovementEntry.visited_places_count}
                             </div>
                           </div>
                         </div>
@@ -1059,7 +1175,7 @@ function HealthDetailPanel({
                             <div className="mt-1 text-sm text-slate-300">A compact visual rhythm of your stops and movement.</div>
                           </div>
                           <div className="text-xs text-slate-400">
-                            {formatMovementWindow(latestMovementEntry.commute_start, latestMovementEntry.commute_end)}
+                            {formatMovementWindow(selectedMovementEntry.commute_start, selectedMovementEntry.commute_end)}
                           </div>
                         </div>
                         <div className="mt-4 flex h-4 overflow-hidden rounded-full border border-white/8 bg-[rgba(8,10,18,0.9)]">
@@ -1084,7 +1200,7 @@ function HealthDetailPanel({
                         </div>
                       </div>
 
-                      {hasMovementMap && latestMovementEntry ? (
+                      {hasMovementMap && selectedMovementEntry ? (
                         <div className="rounded-[1.3rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
                           <div className="flex items-center justify-between gap-3">
                             <div>
@@ -1092,16 +1208,16 @@ function HealthDetailPanel({
                               <div className="mt-1 text-sm text-slate-300">A quiet geographic view of today&apos;s movement path.</div>
                             </div>
                             <div className="text-xs text-slate-400">
-                              {latestMovementEntry.route_points.length || latestMovementEntry.visits.length} points
+                              {selectedMovementEntry.route_points.length || selectedMovementEntry.visits.length} points
                             </div>
                           </div>
                           <div className="mt-4 overflow-hidden rounded-[1.2rem] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.14),transparent_32%),linear-gradient(180deg,rgba(9,12,22,0.96),rgba(15,18,28,0.96))]">
-                            <MovementMap entry={latestMovementEntry} className="h-[460px] xl:h-[520px]" />
+                            <MovementMap entry={selectedMovementEntry} className="h-[460px] xl:h-[520px]" />
                           </div>
                           <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
                             <span className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1">Start</span>
                             <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1">End</span>
-                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{latestMovementEntry.place_labels.length} labeled places</span>
+                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">{selectedMovementEntry.place_labels.length} labeled places</span>
                           </div>
                         </div>
                       ) : null}
@@ -1110,34 +1226,34 @@ function HealthDetailPanel({
                         <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
                           <div className="text-xs uppercase tracking-wide text-slate-400">Travel</div>
                           <div className="mt-2 text-2xl font-semibold text-white">
-                            {formatHealthStat(latestMovementEntry.total_distance_km, 1)} km
+                            {formatDistanceMiles(selectedMovementEntry.total_distance_km, 1)}
                           </div>
                           <div className="mt-2 text-xs text-slate-400">
-                            {latestMovementEntry.route_points.length} route points
+                            {selectedMovementEntry.route_points.length} route points
                           </div>
                         </div>
                         <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
                           <div className="text-xs uppercase tracking-wide text-slate-400">Away time</div>
                           <div className="mt-2 text-2xl font-semibold text-white">
-                            {formatMinutes(latestMovementEntry.time_away_minutes)}
+                            {formatMinutes(selectedMovementEntry.time_away_minutes)}
                           </div>
                           <div className="mt-2 text-xs text-slate-400">
-                            {latestMovementEntry.visited_places_count} visit event{latestMovementEntry.visited_places_count === 1 ? "" : "s"}
+                            {selectedMovementEntry.visited_places_count} visit event{selectedMovementEntry.visited_places_count === 1 ? "" : "s"}
                           </div>
                         </div>
                         <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
                           <div className="text-xs uppercase tracking-wide text-slate-400">Commute window</div>
                           <div className="mt-2 text-sm font-semibold text-white">
-                            {formatMovementWindow(latestMovementEntry.commute_start, latestMovementEntry.commute_end)}
+                            {formatMovementWindow(selectedMovementEntry.commute_start, selectedMovementEntry.commute_end)}
                           </div>
                           <div className="mt-2 text-xs text-slate-400">
-                            Synced {latestMovementEntry.synced_at ? formatScheduleDateTime(latestMovementEntry.synced_at) : "unknown"}
+                            Synced {selectedMovementEntry.synced_at ? formatScheduleDateTime(selectedMovementEntry.synced_at) : "unknown"}
                           </div>
                         </div>
                         <div className="rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] p-4">
                           <div className="text-xs uppercase tracking-wide text-slate-400">Places</div>
                           <div className="mt-2 text-2xl font-semibold text-white">
-                            {latestMovementEntry.place_labels.length}
+                            {selectedMovementEntry.place_labels.length}
                           </div>
                           <div className="mt-2 text-xs text-slate-400">
                             labels captured
@@ -1145,9 +1261,9 @@ function HealthDetailPanel({
                         </div>
                       </div>
 
-                      {latestMovementEntry.place_labels.length ? (
+                      {selectedMovementEntry.place_labels.length ? (
                         <div className="flex flex-wrap gap-2">
-                          {latestMovementEntry.place_labels.map((label) => (
+                          {selectedMovementEntry.place_labels.map((label) => (
                             <span
                               key={label}
                               className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-300"
@@ -1689,6 +1805,8 @@ export default function HomePage() {
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [mailView, setMailView] = useState<"ai" | "raw">("ai");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
+  const [healthEntries, setHealthEntries] = useState<HealthDailyEntry[]>([]);
+  const [selectedHealthDate, setSelectedHealthDate] = useState<string | null>(null);
   const [movementEntries, setMovementEntries] = useState<MovementDailyEntry[]>([]);
   const [workoutEntries, setWorkoutEntries] = useState<WorkoutEntry[]>([]);
   const [movementLoading, setMovementLoading] = useState(false);
@@ -2013,8 +2131,9 @@ export default function HomePage() {
     setError("");
 
     try {
-      const [dashboardResponse, movementResponse, workoutsResponse] = await Promise.all([
+      const [dashboardResponse, healthResponse, movementResponse, workoutsResponse] = await Promise.all([
         fetch(`${API_BASE}/dashboard`),
+        fetch(`${API_BASE}/health?days=3650`),
         fetch(`${API_BASE}/movement?days=14`),
         fetch(`${API_BASE}/workouts?days=90&limit=60`),
       ]);
@@ -2028,6 +2147,15 @@ export default function HomePage() {
       const data: DashboardResponse = await dashboardResponse.json();
       setDashboard(data);
       hasLoadedDashboardRef.current = true;
+
+      if (healthResponse.ok) {
+        const healthData: HealthListResponse = await healthResponse.json();
+        const nextHealthEntries = [...healthData.entries].sort((left, right) => right.date.localeCompare(left.date));
+        setHealthEntries(nextHealthEntries);
+        setSelectedHealthDate((current) => current ?? nextHealthEntries[0]?.date ?? data.health_summary?.today_entry?.date ?? null);
+      } else {
+        setHealthEntries([]);
+      }
 
       if (movementResponse.ok) {
         const movementData: MovementListResponse = await movementResponse.json();
@@ -2566,6 +2694,28 @@ export default function HomePage() {
     }
   );
 
+  const refreshDashboardMovementEffect = useEffectEvent(async () => {
+    try {
+      const [dashboardResponse, movementResponse] = await Promise.all([
+        fetch(`${API_BASE}/dashboard`, { cache: "no-store" }),
+        fetch(`${API_BASE}/movement?days=14`, { cache: "no-store" }),
+      ]);
+
+      if (dashboardResponse.ok) {
+        const dashboardData: DashboardResponse = await dashboardResponse.json();
+        setDashboard(dashboardData);
+        hasLoadedDashboardRef.current = true;
+      }
+
+      if (movementResponse.ok) {
+        const movementData: MovementListResponse = await movementResponse.json();
+        setMovementEntries(movementData.entries);
+      }
+    } catch {
+      // Keep background refresh quiet so transient failures do not disrupt the dashboard.
+    }
+  });
+
   const replaceOrRemoveEmail = (updatedEmail: Email) => {
     setEmails((currentEmails) => {
       const nextEmails = currentEmails
@@ -3066,6 +3216,18 @@ export default function HomePage() {
   useEffect(() => {
     fetchEmailsEffect(mode, selectedMailbox, mailView);
   }, [mode, selectedMailbox, classifiedBucket, scheduleDays, mailView]);
+
+  useEffect(() => {
+    if (mode !== "dashboard" && mode !== "health") {
+      return;
+    }
+
+    const poll = window.setInterval(() => {
+      void refreshDashboardMovementEffect();
+    }, LIVE_MOVEMENT_REFRESH_MS);
+
+    return () => window.clearInterval(poll);
+  }, [mode]);
 
   useEffect(() => {
     if (mode !== "mail" || mailView !== "raw") return;
@@ -4225,7 +4387,7 @@ export default function HomePage() {
                         <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                           <div className="text-xs uppercase tracking-wide text-slate-400">Movement</div>
                           <div className="mt-2 text-2xl font-semibold text-white">
-                            {movementEntries[0] ? `${formatHealthStat(movementEntries[0].total_distance_km, 1)} km` : "--"}
+                            {movementEntries[0] ? formatDistanceMiles(movementEntries[0].total_distance_km, 1) : "--"}
                           </div>
                           <div className="mt-2 text-xs text-slate-400">
                             {movementEntries[0]
@@ -4402,6 +4564,9 @@ export default function HomePage() {
         ) : mode === "health" ? (
           <HealthDetailPanel
             dashboard={dashboard}
+            healthEntries={healthEntries}
+            selectedHealthDate={selectedHealthDate}
+            onSelectedHealthDateChange={setSelectedHealthDate}
             movementEntries={movementEntries}
             workoutEntries={workoutEntries}
             movementLoading={movementLoading}

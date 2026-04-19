@@ -27,4 +27,4 @@ def list_health_entries(days: int = 7) -> HealthListResponse:
     init_health_store()
     user_id = get_default_user_context().user_id
     entries: list[HealthDailyEntry] = list_health_daily_entries(days=days, user_id=user_id)
-    return HealthListResponse(entries=list(reversed(entries)))
+    return HealthListResponse(entries=entries)

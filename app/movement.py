@@ -28,4 +28,4 @@ def list_movement_entries(days: int = 14) -> MovementListResponse:
     init_movement_store()
     user_id = get_default_user_context().user_id
     entries = list_movement_daily_entries(days=days, user_id=user_id)
-    return MovementListResponse(entries=list(reversed(entries)))
+    return MovementListResponse(entries=entries)
