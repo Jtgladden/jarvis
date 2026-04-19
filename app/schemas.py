@@ -458,3 +458,59 @@ class HealthDailySyncResponse(BaseModel):
 
 class HealthListResponse(BaseModel):
     entries: List[HealthDailyEntry] = Field(default_factory=list)
+
+
+class MovementVisit(BaseModel):
+    arrival: Optional[str] = None
+    departure: Optional[str] = None
+    latitude: float
+    longitude: float
+    horizontal_accuracy_m: Optional[float] = None
+    label: Optional[str] = None
+
+
+class MovementRoutePoint(BaseModel):
+    timestamp: str
+    latitude: float
+    longitude: float
+    horizontal_accuracy_m: Optional[float] = None
+
+
+class MovementDailyEntry(BaseModel):
+    date: str
+    source: str = "ios_core_location"
+    total_distance_km: float = 0
+    time_away_minutes: Optional[int] = None
+    visited_places_count: int = 0
+    movement_story: str = ""
+    home_label: Optional[str] = None
+    commute_start: Optional[str] = None
+    commute_end: Optional[str] = None
+    visits: List[MovementVisit] = Field(default_factory=list)
+    route_points: List[MovementRoutePoint] = Field(default_factory=list)
+    place_labels: List[str] = Field(default_factory=list)
+    synced_at: Optional[str] = None
+
+
+class MovementDailySyncRequest(BaseModel):
+    date: str
+    source: str = "ios_core_location"
+    total_distance_km: float = 0
+    time_away_minutes: Optional[int] = None
+    visited_places_count: int = 0
+    movement_story: str = ""
+    home_label: Optional[str] = None
+    commute_start: Optional[str] = None
+    commute_end: Optional[str] = None
+    visits: List[MovementVisit] = Field(default_factory=list)
+    route_points: List[MovementRoutePoint] = Field(default_factory=list)
+    place_labels: List[str] = Field(default_factory=list)
+
+
+class MovementDailySyncResponse(BaseModel):
+    saved: bool = True
+    entry: MovementDailyEntry
+
+
+class MovementListResponse(BaseModel):
+    entries: List[MovementDailyEntry] = Field(default_factory=list)

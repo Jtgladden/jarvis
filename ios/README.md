@@ -38,6 +38,24 @@ You can still update these defaults in `Info.plist`, but the app now lets you sw
 - Active energy burned
 - Workouts
 
+## Movement journal starter
+
+The app now also includes a first-pass `Core Location` movement journal:
+
+- requests location authorization
+- monitors visits and significant movement
+- stores a local day log with visits and route points
+- syncs a daily movement summary to `POST /api/movement/daily`
+
+This is a V1 foundation for:
+
+- total distance traveled
+- number of visited places
+- arrival/departure timeline
+- approximate route polyline
+- commute start/end heuristics
+- movement story summaries
+
 ## Next step
 
 After permission succeeds, the app can now post a daily health summary to the Jarvis backend with the `Sync to Jarvis` button.

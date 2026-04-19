@@ -101,6 +101,38 @@ type DashboardHealthSummary = {
   streak_days: number;
 };
 
+type MovementDailyEntry = {
+  date: string;
+  source: string;
+  total_distance_km: number;
+  time_away_minutes?: number | null;
+  visited_places_count: number;
+  movement_story: string;
+  home_label?: string | null;
+  commute_start?: string | null;
+  commute_end?: string | null;
+  visits: Array<{
+    arrival?: string | null;
+    departure?: string | null;
+    latitude: number;
+    longitude: number;
+    horizontal_accuracy_m?: number | null;
+    label?: string | null;
+  }>;
+  route_points: Array<{
+    timestamp: string;
+    latitude: number;
+    longitude: number;
+    horizontal_accuracy_m?: number | null;
+  }>;
+  place_labels: string[];
+  synced_at?: string | null;
+};
+
+type MovementListResponse = {
+  entries: MovementDailyEntry[];
+};
+
 type TaskListResponse = {
   generated_at: string;
   tasks: DashboardTaskItem[];
@@ -215,6 +247,32 @@ function formatHealthStat(value: number | null | undefined, digits = 0) {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
+}
+
+function formatMinutes(value: number | null | undefined) {
+  if (value === null || value === undefined) return "--";
+  if (value < 60) return `${formatHealthStat(value)} min`;
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  if (minutes === 0) return `${hours} hr`;
+  return `${hours} hr ${minutes} min`;
+}
+
+function formatScheduleTime(value: string | null | undefined) {
+  if (!value) return "Unknown";
+  const parsed = parseCalendarDate(value);
+  if (!parsed) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function formatMovementWindow(start: string | null | undefined, end: string | null | undefined) {
+  if (start && end) return `${formatScheduleTime(start)} to ${formatScheduleTime(end)}`;
+  if (start) return `Started ${formatScheduleTime(start)}`;
+  if (end) return `Ended ${formatScheduleTime(end)}`;
+  return "No commute markers";
 }
 
 function healthMetricLabel(key: string) {
@@ -332,6 +390,8 @@ function MobilePageContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
+  const [movementEntries, setMovementEntries] = useState<MovementDailyEntry[]>([]);
+  const [expandedMetricsOpen, setExpandedMetricsOpen] = useState(false);
   const [tasks, setTasks] = useState<DashboardTaskItem[]>([]);
   const [journal, setJournal] = useState<JournalDayEntry[]>([]);
   const [journalQuery, setJournalQuery] = useState("");
@@ -377,11 +437,12 @@ function MobilePageContent() {
     setError("");
 
     try {
-      const [dashboardResponse, tasksResponse, journalResponse, scheduleResponse] = await Promise.all([
+      const [dashboardResponse, tasksResponse, journalResponse, scheduleResponse, movementResponse] = await Promise.all([
         fetch(`${API_BASE}/dashboard`),
         fetch(`${API_BASE}/tasks?include_completed=true`),
         fetch(`${API_BASE}/journal?days=${journalQuery ? "20" : "10"}${journalQuery ? `&query=${encodeURIComponent(journalQuery)}` : ""}`),
         fetch(`${API_BASE}/calendar/schedule?days=7&max_results=24`),
+        fetch(`${API_BASE}/movement?days=14`),
       ]);
 
       for (const response of [dashboardResponse, tasksResponse, journalResponse, scheduleResponse]) {
@@ -401,6 +462,12 @@ function MobilePageContent() {
       setTasks(tasksData.tasks);
       setJournal(journalData.entries);
       setSchedule(scheduleData.items);
+      if (movementResponse.ok) {
+        const movementData = (await movementResponse.json()) as MovementListResponse;
+        setMovementEntries(movementData.entries);
+      } else {
+        setMovementEntries([]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load mobile view.");
     } finally {
@@ -700,13 +767,15 @@ function MobilePageContent() {
                   className="w-full rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 text-left"
                 >
                   <div className="text-sm font-medium text-white">
-                    {formatHealthStat(dashboard?.health_summary?.today_entry?.steps)} steps today
+                    {formatHealthStat(dashboard?.health_summary?.today_entry?.steps)} steps · {movementEntries[0] ? `${formatHealthStat(movementEntries[0].total_distance_km, 1)} km` : "--"}
                   </div>
                   <div className="mt-1 text-xs text-slate-400">
                     Sleep avg {formatHealthStat(dashboard?.health_summary?.seven_day_avg_sleep_hours, 1)} hr · Resting HR {formatHealthStat(dashboard?.health_summary?.today_entry?.resting_heart_rate)} bpm
                   </div>
                   <div className="mt-2 text-sm leading-6 text-slate-300">
-                    {dashboard?.health_summary
+                    {movementEntries[0]?.movement_story
+                      ? movementEntries[0].movement_story
+                      : dashboard?.health_summary
                       ? `${dashboard.health_summary.streak_days} day movement streak and ${dashboard.health_summary.recent_entries.length} synced days.`
                       : "No health data synced yet."}
                   </div>
@@ -903,56 +972,97 @@ function MobilePageContent() {
           <div className="space-y-4">
             <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
               <CardHeader className="pb-2">
-                <CardTitle className="text-lg">Health snapshot</CardTitle>
+                <CardTitle className="text-lg">Health and movement</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                {dashboard?.health_summary ? (
+                {dashboard?.health_summary || movementEntries.length ? (
                   <>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
-                        <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Today&apos;s steps</div>
-                        <div className="mt-2 text-2xl font-semibold text-white">
-                          {formatHealthStat(dashboard.health_summary.today_entry?.steps)}
+                    {dashboard?.health_summary ? (
+                      <>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Today&apos;s steps</div>
+                            <div className="mt-2 text-2xl font-semibold text-white">
+                              {formatHealthStat(dashboard.health_summary.today_entry?.steps)}
+                            </div>
+                            <div className="mt-2 text-xs text-slate-400">
+                              7-day avg {formatHealthStat(dashboard.health_summary.seven_day_avg_steps)}
+                            </div>
+                          </div>
+                          <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Sleep average</div>
+                            <div className="mt-2 text-2xl font-semibold text-white">
+                              {formatHealthStat(dashboard.health_summary.seven_day_avg_sleep_hours, 1)} hr
+                            </div>
+                            <div className="mt-2 text-xs text-slate-400">
+                              Resting HR {formatHealthStat(dashboard.health_summary.today_entry?.resting_heart_rate)} bpm
+                            </div>
+                          </div>
                         </div>
-                        <div className="mt-2 text-xs text-slate-400">
-                          7-day avg {formatHealthStat(dashboard.health_summary.seven_day_avg_steps)}
+
+                        <div className="rounded-[1.2rem] border border-cyan-300/18 bg-cyan-400/8 px-4 py-3 text-sm leading-6 text-slate-200">
+                          {dashboard.health_summary.streak_days} day movement streak, {formatHealthStat(dashboard.health_summary.today_entry?.workouts)} workouts today, latest sync {dashboard.health_summary.last_synced_at ? formatScheduleDateTime(dashboard.health_summary.last_synced_at) : "unknown"}.
                         </div>
-                      </div>
-                      <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-3">
-                        <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Sleep average</div>
-                        <div className="mt-2 text-2xl font-semibold text-white">
-                          {formatHealthStat(dashboard.health_summary.seven_day_avg_sleep_hours, 1)} hr
+                      </>
+                    ) : null}
+
+                    <div className="rounded-[1.2rem] border border-emerald-300/18 bg-emerald-400/8 px-4 py-3">
+                      <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/80">Movement today</div>
+                      {movementEntries[0] ? (
+                        <>
+                          <div className="mt-2 text-sm font-medium text-white">
+                            {formatHealthStat(movementEntries[0].total_distance_km, 1)} km traveled
+                          </div>
+                          <div className="mt-1 text-xs text-slate-300">
+                            {movementEntries[0].visited_places_count} visits · {formatMinutes(movementEntries[0].time_away_minutes)} away · {formatMovementWindow(movementEntries[0].commute_start, movementEntries[0].commute_end)}
+                          </div>
+                          <div className="mt-3 text-sm leading-6 text-slate-100">
+                            {movementEntries[0].movement_story || "No movement story generated yet."}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="mt-2 text-sm text-slate-300">
+                          No movement journal synced yet.
                         </div>
-                        <div className="mt-2 text-xs text-slate-400">
-                          Resting HR {formatHealthStat(dashboard.health_summary.today_entry?.resting_heart_rate)} bpm
-                        </div>
-                      </div>
+                      )}
                     </div>
 
-                    <div className="rounded-[1.2rem] border border-cyan-300/18 bg-cyan-400/8 px-4 py-3 text-sm leading-6 text-slate-200">
-                      {dashboard.health_summary.streak_days} day movement streak, {formatHealthStat(dashboard.health_summary.today_entry?.workouts)} workouts today, latest sync {dashboard.health_summary.last_synced_at ? formatScheduleDateTime(dashboard.health_summary.last_synced_at) : "unknown"}.
-                    </div>
-
-                    {dashboard.health_summary.today_entry?.extra_metrics &&
+                    {dashboard?.health_summary?.today_entry?.extra_metrics &&
                     Object.keys(dashboard.health_summary.today_entry.extra_metrics).length ? (
                       <div className="space-y-2">
-                        <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Expanded metrics</div>
-                        {Object.entries(dashboard.health_summary.today_entry.extra_metrics)
-                          .filter(([, value]) => value !== null && value !== undefined)
-                          .slice(0, 12)
-                          .map(([key, value]) => (
-                            <div
-                              key={key}
-                              className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3"
-                            >
-                              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                                {healthMetricLabel(key)}
-                              </div>
-                              <div className="mt-1 text-sm font-medium text-white">
-                                {formatHealthMetricValue(key, value)}
-                              </div>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedMetricsOpen((current) => !current)}
+                          className="flex w-full items-center justify-between rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3 text-left"
+                        >
+                          <div>
+                            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Expanded metrics</div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {expandedMetricsOpen ? "Hide detailed measurements" : "Show detailed measurements"}
                             </div>
-                          ))}
+                          </div>
+                          <span className="text-xs text-cyan-200">
+                            {expandedMetricsOpen ? "Hide" : "Show"}
+                          </span>
+                        </button>
+                        {expandedMetricsOpen
+                          ? Object.entries(dashboard.health_summary.today_entry.extra_metrics)
+                              .filter(([, value]) => value !== null && value !== undefined)
+                              .slice(0, 12)
+                              .map(([key, value]) => (
+                                <div
+                                  key={key}
+                                  className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3"
+                                >
+                                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                                    {healthMetricLabel(key)}
+                                  </div>
+                                  <div className="mt-1 text-sm font-medium text-white">
+                                    {formatHealthMetricValue(key, value)}
+                                  </div>
+                                </div>
+                              ))
+                          : null}
                       </div>
                     ) : null}
 
@@ -976,6 +1086,35 @@ function MobilePageContent() {
                           </div>
                         </div>
                       ))}
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Recent movement days</div>
+                      {movementEntries.length ? (
+                        movementEntries.slice(0, 6).map((entry) => (
+                          <div
+                            key={entry.date}
+                            className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3"
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-sm font-medium text-white">{entry.date}</div>
+                              <div className="text-xs text-slate-400">
+                                {formatHealthStat(entry.total_distance_km, 1)} km
+                              </div>
+                            </div>
+                            <div className="mt-2 text-xs text-slate-300">
+                              {entry.visited_places_count} visits · {formatMinutes(entry.time_away_minutes)} away · {formatMovementWindow(entry.commute_start, entry.commute_end)}
+                            </div>
+                            <div className="mt-2 text-sm leading-6 text-slate-200">
+                              {entry.movement_story || "No movement story available."}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-[1.2rem] border border-dashed border-white/10 px-4 py-4 text-sm text-slate-400">
+                          No movement history yet.
+                        </div>
+                      )}
                     </div>
                   </>
                 ) : (

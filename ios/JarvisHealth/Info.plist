@@ -20,6 +20,10 @@
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Jarvis uses your location to build a daily movement journal with visits, travel distance, and commute timing.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Jarvis uses background location to keep your movement journal up to date throughout the day.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Jarvis Health connects to your local Jarvis server on your home network so it can sync Apple Health data.</string>
 	<key>NSHealthClinicalHealthRecordsShareUsageDescription</key>
@@ -40,6 +44,10 @@
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

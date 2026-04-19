@@ -19,9 +19,11 @@ from app.health import list_health_entries, sync_health_daily_entry
 from app.health_store import init_health_store
 from app.journal import get_journal, get_journal_day, save_journal_day
 from app.journal_store import init_journal_store
+from app.movement import list_movement_entries, sync_movement_daily_entry
+from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
 from app.rules import classify_new_email_rule
-from app.schemas import CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest
+from app.schemas import CalendarAgendaResponse, CalendarEventCreateResponse, CalendarEventPreview, CalendarQuickAddRequest, CalendarQuickAddResponse, ClassifiedEmailResponse, ClassificationGuidanceRequest, ClassificationGuidanceResponse, ClassificationOverviewResponse, CleanupJobStartResponse, CleanupJobStatus, CleanupResponse, DashboardResponse, DashboardTaskItem, EmailPageResponse, EmailSummary, EmailUpdateRequest, EmailUpdateResponse, GmailLabel, HandleEmailResponse, HealthDailySyncRequest, HealthDailySyncResponse, HealthListResponse, JournalDayEntry, JournalDayNoteUpdateRequest, JournalResponse, MovementDailySyncRequest, MovementDailySyncResponse, MovementListResponse, PlanningCalendarBulkCreateRequest, PlanningCalendarBulkCreateResponse, PlanningCalendarCreateRequest, PlanningCalendarCreateResponse, PlanningJobStartResponse, PlanningJobStatus, PlanningRequest, PlanningResponse, RuleProcessResponse, TaskCreateRequest, TaskListResponse, TaskUpdateRequest
 from app.task_service import create_task, delete_task, list_tasks, update_task
 from app.task_store import init_task_store
 from app.user_context import get_default_user_context
@@ -177,6 +179,7 @@ def start_background_new_mail_sorter() -> None:
     init_journal_store()
     init_task_store()
     init_health_store()
+    init_movement_store()
     thread = Thread(target=_new_mail_sort_loop, daemon=True)
     thread.start()
 
@@ -299,6 +302,16 @@ def sync_health_daily(payload: HealthDailySyncRequest):
     response = sync_health_daily_entry(payload)
     invalidate_dashboard_cache(get_default_user_context().user_id)
     return response
+
+
+@api.get("/movement", response_model=MovementListResponse)
+def movement(days: int = Query(default=14, ge=1, le=60)):
+    return list_movement_entries(days=days)
+
+
+@api.post("/movement/daily", response_model=MovementDailySyncResponse)
+def sync_movement_daily(payload: MovementDailySyncRequest):
+    return sync_movement_daily_entry(payload)
 
 
 @api.get("/tasks", response_model=TaskListResponse)

@@ -2,7 +2,9 @@ credentials.json
 app/__pycache__
 token.json
 .env
+.deriveddata/
 data/classification_cache.db
 data/journal_entries.db
 data/tasks.db
 data/health.db
+data/movement.db

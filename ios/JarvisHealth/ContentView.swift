@@ -1,7 +1,9 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var healthKitManager: HealthKitManager
+    @EnvironmentObject private var movementManager: MovementManager
 
     var body: some View {
         NavigationStack {
@@ -10,6 +12,7 @@ struct ContentView: View {
                     headerCard
                     metricsCard
                     serverCard
+                    movementCard
                     permissionCard
                 }
                 .padding(20)
@@ -18,6 +21,16 @@ struct ContentView: View {
         }
         .task {
             healthKitManager.refreshAuthorizationStatus()
+            movementManager.configureSync(baseURL: healthKitManager.selectedBaseURL)
+            movementManager.handleAppBecameActive()
+        }
+        .onChange(of: healthKitManager.selectedBaseURL) { _, newValue in
+            movementManager.configureSync(baseURL: newValue)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                movementManager.handleAppBecameActive()
+            }
         }
     }
 
@@ -113,6 +126,65 @@ struct ContentView: View {
             Text("Current sync target: \(healthKitManager.selectedBaseURL)")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private var movementCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Movement Journal")
+                .font(.headline)
+
+            Text(movementManager.authorizationMessage)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Text("Tracking and syncing run automatically after permission is granted. The controls below are mainly for setup and fallback.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            if let errorMessage = movementManager.errorMessage {
+                Text(errorMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Button("Enable Location") {
+                    movementManager.requestAuthorization()
+                }
+                .buttonStyle(.bordered)
+
+                Button(movementManager.isTracking ? "Stop Tracking" : "Start Tracking") {
+                    if movementManager.isTracking {
+                        movementManager.stopTracking()
+                    } else {
+                        movementManager.startTracking()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            Button("Sync Movement to Jarvis") {
+                Task {
+                    await movementManager.syncTodayToJarvis(baseURL: healthKitManager.selectedBaseURL)
+                }
+            }
+            .buttonStyle(.bordered)
+
+            if let summary = movementManager.todaySummary {
+                Text(summary)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let syncMessage = movementManager.syncMessage {
+                Text(syncMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(.green)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
