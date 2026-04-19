@@ -654,6 +654,7 @@ function HealthDetailPanel({
   loading: boolean;
   onBackToDashboard?: () => void;
 }) {
+  const healthSummary = dashboard?.health_summary ?? null;
   const latestMovementEntry = movementEntries[0] ?? null;
   const [expandedMetricsOpen, setExpandedMetricsOpen] = useState(false);
 
@@ -679,66 +680,66 @@ function HealthDetailPanel({
           </div>
         </CardHeader>
         <CardContent>
-          {dashboard?.health_summary || latestMovementEntry ? (
+          {healthSummary || latestMovementEntry ? (
             <div className="space-y-4">
-              {dashboard?.health_summary ? (
+              {healthSummary ? (
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                     <div className="text-xs uppercase tracking-wide text-slate-400">Today&apos;s steps</div>
                     <div className="mt-2 text-2xl font-semibold text-white">
-                      {formatHealthStat(dashboard.health_summary.today_entry?.steps)}
+                      {formatHealthStat(healthSummary.today_entry?.steps)}
                     </div>
                     <div className="mt-2 text-xs text-slate-400">
-                      7-day avg {formatHealthStat(dashboard.health_summary.seven_day_avg_steps)}
+                      7-day avg {formatHealthStat(healthSummary.seven_day_avg_steps)}
                     </div>
                   </div>
                   <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                     <div className="text-xs uppercase tracking-wide text-slate-400">Active energy</div>
                     <div className="mt-2 text-2xl font-semibold text-white">
-                      {formatHealthStat(dashboard.health_summary.today_entry?.active_energy_kcal)} kcal
+                      {formatHealthStat(healthSummary.today_entry?.active_energy_kcal)} kcal
                     </div>
                     <div className="mt-2 text-xs text-slate-400">
-                      {dashboard.health_summary.streak_days} day movement streak
+                      {healthSummary.streak_days} day movement streak
                     </div>
                   </div>
                   <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                     <div className="text-xs uppercase tracking-wide text-slate-400">Sleep average</div>
                     <div className="mt-2 text-2xl font-semibold text-white">
-                      {formatHealthStat(dashboard.health_summary.seven_day_avg_sleep_hours, 1)} hr
+                      {formatHealthStat(healthSummary.seven_day_avg_sleep_hours, 1)} hr
                     </div>
                     <div className="mt-2 text-xs text-slate-400">
-                      Workouts today {formatHealthStat(dashboard.health_summary.today_entry?.workouts)}
+                      Workouts today {formatHealthStat(healthSummary.today_entry?.workouts)}
                     </div>
                   </div>
                   <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                     <div className="text-xs uppercase tracking-wide text-slate-400">Resting heart rate</div>
                     <div className="mt-2 text-2xl font-semibold text-white">
-                      {formatHealthStat(dashboard.health_summary.today_entry?.resting_heart_rate)} bpm
+                      {formatHealthStat(healthSummary.today_entry?.resting_heart_rate)} bpm
                     </div>
                     <div className="mt-2 text-xs text-slate-400">
-                      Latest sync {dashboard.health_summary.last_synced_at ? formatScheduleDateTime(dashboard.health_summary.last_synced_at) : "unknown"}
+                      Latest sync {healthSummary.last_synced_at ? formatScheduleDateTime(healthSummary.last_synced_at) : "unknown"}
                     </div>
                   </div>
                 </div>
               ) : null}
 
-              {dashboard?.health_summary ? (
+              {healthSummary ? (
                 <div className="rounded-[1.4rem] border border-cyan-300/15 bg-[linear-gradient(135deg,rgba(56,189,248,0.12),rgba(35,37,58,0.85))] p-4">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-cyan-100">
-                    {dashboard.health_summary.latest_date ? (
+                    {healthSummary.latest_date ? (
                       <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-2.5 py-1">
-                        Latest data date {dashboard.health_summary.latest_date}
+                        Latest data date {healthSummary.latest_date}
                       </span>
                     ) : null}
                     <span className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-2.5 py-1">
-                      {dashboard.health_summary.recent_entries.length} synced day{dashboard.health_summary.recent_entries.length === 1 ? "" : "s"}
+                      {healthSummary.recent_entries.length} synced day{healthSummary.recent_entries.length === 1 ? "" : "s"}
                     </span>
                   </div>
                 </div>
               ) : null}
 
-              {dashboard?.health_summary?.today_entry?.extra_metrics &&
-              Object.keys(dashboard.health_summary.today_entry.extra_metrics).length ? (
+              {healthSummary?.today_entry?.extra_metrics &&
+              Object.keys(healthSummary.today_entry.extra_metrics).length ? (
                 <div className="rounded-[1.4rem] border border-white/6 bg-[rgba(35,37,58,0.72)] p-4">
                   <button
                     type="button"
@@ -757,7 +758,7 @@ function HealthDetailPanel({
                   </button>
                   {expandedMetricsOpen ? (
                     <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                      {Object.entries(dashboard.health_summary.today_entry.extra_metrics)
+                      {Object.entries(healthSummary.today_entry.extra_metrics)
                         .filter(([, value]) => value !== null && value !== undefined)
                         .map(([key, value]) => (
                           <div
@@ -782,7 +783,7 @@ function HealthDetailPanel({
                   <CardTitle className="text-base">Recent history</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2">
-                  {dashboard.health_summary.recent_entries.slice().reverse().map((entry) => (
+                  {healthSummary?.recent_entries.slice().reverse().map((entry) => (
                     <div
                       key={entry.date}
                       className="flex items-center justify-between rounded-[1.2rem] border border-white/6 bg-[rgba(17,19,34,0.45)] px-4 py-3 text-sm"
