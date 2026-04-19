@@ -174,6 +174,14 @@ function saveLocalThread(thread: AssistantChatThread) {
   safeLocalStorageSet(LOCAL_THREADS_KEY, JSON.stringify(threads));
 }
 
+function updateLocalThread(chatId: string, updater: (thread: AssistantChatThread) => AssistantChatThread) {
+  const threads = loadLocalThreads();
+  const existing = threads[chatId];
+  if (!existing) return;
+  threads[chatId] = updater(existing);
+  safeLocalStorageSet(LOCAL_THREADS_KEY, JSON.stringify(threads));
+}
+
 function removeLocalThread(chatId: string) {
   const threads = loadLocalThreads();
   delete threads[chatId];
@@ -203,6 +211,7 @@ export function AssistantPanel({
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chatTab, setChatTab] = useState<"active" | "archived">("active");
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
+  const [expandedBulletIds, setExpandedBulletIds] = useState<Record<string, boolean>>({});
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -225,7 +234,13 @@ export function AssistantPanel({
         );
       }
       const data = (await response.json()) as { chats: AssistantChatSummary[] };
-      const serverChats = data.chats || [];
+      const archivedIds = loadLocalIdSet(LOCAL_ARCHIVED_CHAT_IDS_KEY);
+      const deletedIds = loadLocalIdSet(LOCAL_DELETED_CHAT_IDS_KEY);
+      const serverChats = (data.chats || []).filter((chat) => {
+        if (deletedIds.has(chat.id)) return false;
+        const locallyArchived = archivedIds.has(chat.id);
+        return locallyArchived === (tab === "archived");
+      });
       const merged = [...serverChats];
       const seen = new Set(serverChats.map((chat) => chat.id));
       for (const localChat of localThreadSummaries(tab === "archived")) {
@@ -399,6 +414,7 @@ export function AssistantPanel({
     setActiveChatId(null);
     safeLocalStorageSet(LOCAL_ACTIVE_CHAT_KEY, "");
     setMessages([]);
+    setExpandedBulletIds({});
     setQuestion("");
     setError("");
     setContextSummary("");
@@ -406,6 +422,15 @@ export function AssistantPanel({
 
   const archiveChatById = useCallback(async (chatId: string, archived: boolean) => {
     setError("");
+    const archivedIds = loadLocalIdSet(LOCAL_ARCHIVED_CHAT_IDS_KEY);
+    if (archived) {
+      archivedIds.add(chatId);
+    } else {
+      archivedIds.delete(chatId);
+    }
+    saveLocalIdSet(LOCAL_ARCHIVED_CHAT_IDS_KEY, archivedIds);
+    updateLocalThread(chatId, (thread) => ({ ...thread, archived }));
+
     try {
       const response = await fetch(`${apiBase}/assistant/chats/${chatId}/archive?archived=${archived ? "true" : "false"}`, {
         method: "PATCH",
@@ -416,16 +441,11 @@ export function AssistantPanel({
         );
       }
     } catch (err) {
-      const archivedIds = loadLocalIdSet(LOCAL_ARCHIVED_CHAT_IDS_KEY);
-      if (archived) {
-        archivedIds.add(chatId);
-      } else {
-        archivedIds.delete(chatId);
-      }
-      saveLocalIdSet(LOCAL_ARCHIVED_CHAT_IDS_KEY, archivedIds);
-      if (!(err instanceof Error)) {
-        setError("Unable to update archive state on the server. Kept the change locally.");
-      }
+      setError(
+        err instanceof Error
+          ? `${err.message} Kept the archive change locally.`
+          : "Unable to update archive state on the server. Kept the change locally."
+      );
     }
 
     if (activeChatId === chatId) {
@@ -446,9 +466,11 @@ export function AssistantPanel({
         );
       }
     } catch (err) {
-      if (!(err instanceof Error)) {
-        setError("Unable to delete chat on the server. Removed it locally.");
-      }
+      setError(
+        err instanceof Error
+          ? `${err.message} Removed the chat locally.`
+          : "Unable to delete chat on the server. Removed it locally."
+      );
     }
 
     const deletedIds = loadLocalIdSet(LOCAL_DELETED_CHAT_IDS_KEY);
@@ -464,7 +486,7 @@ export function AssistantPanel({
 
   return (
     <div className={compact ? "space-y-4" : "grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]"}>
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         <div className="flex items-center justify-between gap-3">
           <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Chats</div>
           <Button type="button" variant="outline" className="rounded-2xl" onClick={startNewChat}>
@@ -501,7 +523,7 @@ export function AssistantPanel({
             chats.map((chat) => (
               <div
                 key={chat.id}
-                className={`flex items-center gap-2 rounded-[1rem] border px-2 py-2 transition ${
+                className={`min-w-0 overflow-hidden flex items-center gap-2 rounded-[1rem] border px-2 py-2 transition ${
                   activeChatId === chat.id
                     ? "border-cyan-300/28 bg-cyan-400/10"
                     : "border-white/8 bg-[rgba(255,255,255,0.04)] hover:border-white/14 hover:bg-[rgba(255,255,255,0.06)]"
@@ -510,9 +532,9 @@ export function AssistantPanel({
                 <button
                   type="button"
                   onClick={() => void loadChatThread(chat.id)}
-                  className="min-w-0 flex-1 text-left"
+                  className="min-w-0 flex-1 overflow-hidden text-left"
                 >
-                  <div className="truncate text-sm font-medium text-slate-100">{chat.title || "New chat"}</div>
+                  <div className="block truncate text-sm font-medium text-slate-100">{chat.title || "New chat"}</div>
                 </button>
                 <button
                   type="button"
@@ -587,15 +609,39 @@ export function AssistantPanel({
                   {message.role === "user" ? "You" : "Jarvis"}
                   {message.createdAt ? <span className="text-slate-500">{formatUpdatedAt(message.createdAt)}</span> : null}
                 </div>
-                <div className="whitespace-pre-wrap text-sm leading-6 text-slate-100">{message.content}</div>
+                <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-6 text-slate-100">
+                  {message.content}
+                </div>
                 {message.bullets?.length ? (
-                  <div className="mt-3 space-y-2">
-                    {message.bullets.map((bullet) => (
-                      <div key={bullet} className="rounded-[1rem] border border-white/8 bg-white/5 px-3 py-2 text-xs leading-5 text-slate-300">
-                        {bullet}
+                  (() => {
+                    const bulletKey = message.id || `${message.role}-${index}`;
+                    const expanded = Boolean(expandedBulletIds[bulletKey]);
+                    return (
+                      <div className="mt-3">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedBulletIds((current) => ({
+                              ...current,
+                              [bulletKey]: !expanded,
+                            }))
+                          }
+                          className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-300 transition hover:border-white/16 hover:bg-white/8"
+                        >
+                          {expanded ? "Hide details" : `Show details (${message.bullets.length})`}
+                        </button>
+                        {expanded ? (
+                          <div className="mt-3 space-y-2">
+                            {message.bullets.map((bullet) => (
+                              <div key={bullet} className="rounded-[1rem] border border-white/8 bg-white/5 px-3 py-2 text-xs leading-5 text-slate-300">
+                                {bullet}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })()
                 ) : null}
                 {message.sources?.length ? (
                   <div className="mt-3 flex flex-wrap gap-2">
