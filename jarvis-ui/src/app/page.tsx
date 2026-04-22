@@ -481,6 +481,37 @@ function normalizePlannedRoutePoints(
   );
 }
 
+function isLineStringGeometry(
+  value: unknown
+): value is { type: "LineString"; coordinates: unknown[] } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    (value as { type?: unknown }).type === "LineString" &&
+    "coordinates" in value &&
+    Array.isArray((value as { coordinates?: unknown }).coordinates)
+  );
+}
+
+function getFeatureRouteName(
+  feature: { properties?: { name?: string; title?: string } } | unknown,
+  fallbackName: string
+) {
+  if (
+    typeof feature === "object" &&
+    feature !== null &&
+    "properties" in feature &&
+    typeof feature.properties === "object" &&
+    feature.properties !== null
+  ) {
+    const properties = feature.properties as { name?: string; title?: string };
+    return properties.name || properties.title || fallbackName;
+  }
+
+  return fallbackName;
+}
+
 function parseGeoJsonRoute(text: string, fallbackName: string): PlannedRouteOverlay | null {
   const parsed = JSON.parse(text) as
     | {
@@ -513,7 +544,7 @@ function parseGeoJsonRoute(text: string, fallbackName: string): PlannedRouteOver
 
   for (const feature of candidateFeatures) {
     const geometry = "geometry" in feature ? feature.geometry : feature;
-    if (!geometry || geometry.type !== "LineString" || !Array.isArray(geometry.coordinates)) {
+    if (!isLineStringGeometry(geometry)) {
       continue;
     }
 
@@ -530,8 +561,7 @@ function parseGeoJsonRoute(text: string, fallbackName: string): PlannedRouteOver
 
     if (points.length) {
       const featureName =
-        ("properties" in feature && feature.properties?.name) ||
-        ("properties" in feature && feature.properties?.title) ||
+        getFeatureRouteName(feature, fallbackName) ||
         (!Array.isArray(parsed) && parsed.properties?.name) ||
         fallbackName;
       return {

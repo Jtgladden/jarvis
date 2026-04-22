@@ -29,6 +29,8 @@ services:
     environment:
       NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-/api}
       API_PROXY_TARGET: ${API_PROXY_TARGET:-http://api:8000}
+      NEXT_PUBLIC_CESIUM_ION_TOKEN: ${NEXT_PUBLIC_CESIUM_ION_TOKEN:-}
+      NEXT_PUBLIC_CESIUM_TERRAIN_URL: ${NEXT_PUBLIC_CESIUM_TERRAIN_URL:-}
     ports:
       - "3000:3000"
     depends_on:
