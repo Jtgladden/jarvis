@@ -535,7 +535,6 @@ function formatMovementVisitTitle(
 
 function buildMovementStoryboard(entry: MovementDailyEntry) {
   const items = entry.visits
-    .slice(0, 8)
     .map((visit, index) => {
       const arrivalText = formatTimeOnly(visit.arrival);
       const departureText = formatTimeOnly(visit.departure);

@@ -1066,7 +1066,7 @@ final class HealthKitManager: ObservableObject {
         request.timeoutInterval = 20
         request.httpBody = requestBody
 
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
@@ -1077,7 +1077,11 @@ final class HealthKitManager: ObservableObject {
                 code: httpResponse.statusCode,
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Jarvis returned status \(httpResponse.statusCode) from \(baseURL)."
+                        buildServerErrorMessage(
+                            statusCode: httpResponse.statusCode,
+                            baseURL: baseURL,
+                            responseData: data
+                        )
                 ]
             )
         }
@@ -1138,7 +1142,7 @@ final class HealthKitManager: ObservableObject {
         request.timeoutInterval = 30
         request.httpBody = requestBody
 
-        let (_, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
@@ -1149,10 +1153,50 @@ final class HealthKitManager: ObservableObject {
                 code: httpResponse.statusCode,
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Jarvis returned status \(httpResponse.statusCode) from \(baseURL)."
+                        buildServerErrorMessage(
+                            statusCode: httpResponse.statusCode,
+                            baseURL: baseURL,
+                            responseData: data
+                        )
                 ]
             )
         }
+    }
+
+    private func buildServerErrorMessage(statusCode: Int, baseURL: String, responseData: Data) -> String {
+        var message = "Jarvis returned status \(statusCode) from \(baseURL)."
+        if let serverMessage = parseServerErrorMessage(from: responseData) {
+            message += " \(serverMessage)"
+        }
+        return message
+    }
+
+    private func parseServerErrorMessage(from data: Data) -> String? {
+        guard !data.isEmpty else {
+            return nil
+        }
+
+        if
+            let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let detail = jsonObject["detail"] as? String,
+            !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        guard let rawText = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !rawText.isEmpty
+        else {
+            return nil
+        }
+
+        let collapsedText = rawText.replacingOccurrences(
+            of: #"\s+"#,
+            with: " ",
+            options: .regularExpression
+        )
+        return String(collapsedText.prefix(220))
     }
 
     private func authorizationRequestStatus() async throws -> HKAuthorizationRequestStatus {
@@ -1208,19 +1252,8 @@ final class HealthKitManager: ObservableObject {
     }
 
     private func resolvedBaseURLsForSync() -> [String] {
-        let primary = selectedBaseURL
-        let fallback = serverMode == .production ? normalizedBaseURL(localBaseURL) : productionBaseURL
-        var orderedURLs: [String] = []
-
-        for value in [primary, fallback] {
-            let normalized = normalizedBaseURL(value)
-            guard !normalized.isEmpty, !orderedURLs.contains(normalized) else {
-                continue
-            }
-            orderedURLs.append(normalized)
-        }
-
-        return orderedURLs
+        let normalized = normalizedBaseURL(selectedBaseURL)
+        return normalized.isEmpty ? [] : [normalized]
     }
 
     private func snapshotHasMeaningfulData(_ snapshot: TodayHealthSnapshot) -> Bool {
