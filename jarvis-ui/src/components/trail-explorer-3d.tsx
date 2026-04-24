@@ -27,10 +27,23 @@ type PlannedRouteOverlay = {
   }>;
 };
 
+type NearbyTrailOverlay = {
+  id: string;
+  name?: string;
+  lengthMeters?: number | null;
+  points: Array<{
+    latitude: number;
+    longitude: number;
+  }>;
+};
+
 type TrailExplorer3DProps = {
   entry: TrailExplorerEntry;
   plannedRoute?: PlannedRouteOverlay | null;
   referenceTrail?: PlannedRouteOverlay | null;
+  nearbyTrails?: NearbyTrailOverlay[];
+  activeReferenceTrailId?: string | null;
+  onReferenceTrailSelect?: ((trailId: string) => void) | null;
   focusSearchResult?: GeocodeResult | null;
   imageryMode?: ImageryMode;
   onImageryModeChange?: ((mode: ImageryMode) => void) | null;
@@ -44,6 +57,7 @@ type TrailExplorer3DProps = {
     max_lat: number;
     max_lon: number;
   } | null) => void) | null;
+  onCameraMovingChange?: ((moving: boolean) => void) | null;
   className?: string;
   showOverlayControls?: boolean;
 };
@@ -74,11 +88,48 @@ const CESIUM_JS_URL =
   "https://cesium.com/downloads/cesiumjs/releases/1.113/Build/Cesium/Cesium.js";
 const CESIUM_CSS_URL =
   "https://cesium.com/downloads/cesiumjs/releases/1.113/Build/Cesium/Widgets/widgets.css";
+const MAX_VISIBLE_TRAIL_BADGES = 18;
 
 let cesiumLoadPromise: Promise<any> | null = null;
 
 function cn(...values: Array<string | undefined | false | null>) {
   return values.filter(Boolean).join(" ");
+}
+
+function formatTrailLength(lengthMeters: number | null | undefined) {
+  if (!lengthMeters || !Number.isFinite(lengthMeters) || lengthMeters <= 0) {
+    return null;
+  }
+
+  const miles = lengthMeters / 1609.344;
+  return `${miles.toFixed(miles >= 10 ? 0 : 1)} mi`;
+}
+
+function getTrailEntityId(kind: "line" | "badge", trailId: string) {
+  return `jarvis-nearby-trail-${kind}-${trailId}`;
+}
+
+function getTrailIdFromPickedObject(picked: any) {
+  const pickedId = picked?.id;
+  const trailId = pickedId?.properties?.trailId?.getValue?.();
+  return typeof trailId === "string" && trailId ? trailId : null;
+}
+
+function updateHoveredTrailVisuals(
+  viewer: any,
+  hoveredTrailId: string | null,
+  activeTrailId: string | null | undefined
+) {
+  const entities = viewer.entities.values || [];
+  for (const entity of entities) {
+    const trailId = entity?.properties?.trailId?.getValue?.();
+    const entityKind = entity?.properties?.entityKind?.getValue?.();
+    if (typeof trailId !== "string" || entityKind !== "nearby-trail-line") {
+      continue;
+    }
+
+    entity.show = trailId === activeTrailId || trailId === hoveredTrailId;
+  }
 }
 
 function flyToEntities(Cesium: any, viewer: any, coordinateCount: number) {
@@ -125,42 +176,6 @@ function flyToRectangle3D(
   });
 }
 
-function flyToCoordinateSet(
-  Cesium: any,
-  viewer: any,
-  coordinates: Array<readonly [number, number]>,
-  fallbackRange = 2800
-) {
-  if (!coordinates.length) {
-    return;
-  }
-
-  if (coordinates.length === 1) {
-    viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(
-        coordinates[0][0],
-        coordinates[0][1],
-        Math.max(5200, fallbackRange)
-      ),
-      orientation: {
-        heading: 0,
-        pitch: Cesium.Math.toRadians(-42),
-        roll: 0,
-      },
-      duration: 1.0,
-    });
-    return;
-  }
-
-  const longitudes = coordinates.map(([longitude]) => longitude);
-  const latitudes = coordinates.map(([, latitude]) => latitude);
-  const west = Math.min(...longitudes);
-  const east = Math.max(...longitudes);
-  const south = Math.min(...latitudes);
-  const north = Math.max(...latitudes);
-  flyToRectangle3D(Cesium, viewer, { west, south, east, north }, Math.max(4800, fallbackRange));
-}
-
 function flyToProvoValley(Cesium: any, viewer: any) {
   flyToRectangle3D(Cesium, viewer, {
     west: -111.82,
@@ -204,34 +219,141 @@ function flyToSearchResult(Cesium: any, viewer: any, result: GeocodeResult) {
   }
 }
 
-function extractViewBounds(Cesium: any, viewer: any) {
-  const rectangle = viewer.camera.computeViewRectangle(viewer.scene.globe.ellipsoid);
-  if (!rectangle) {
+function pickCartographicAtScreenPoint(
+  Cesium: any,
+  viewer: any,
+  x: number,
+  y: number
+) {
+  const windowPosition = new Cesium.Cartesian2(x, y);
+  const ray = viewer.camera.getPickRay(windowPosition);
+  const pickedCartesian = ray ? viewer.scene.globe.pick(ray, viewer.scene) : null;
+  return pickedCartesian ? Cesium.Cartographic.fromCartesian(pickedCartesian) : null;
+}
+
+function buildBoundsFromCartographics(
+  Cesium: any,
+  cartographics: any[]
+) {
+  if (cartographics.length < 3) {
     return null;
   }
 
-  const west = Cesium.Math.toDegrees(rectangle.west);
-  const south = Cesium.Math.toDegrees(rectangle.south);
-  const east = Cesium.Math.toDegrees(rectangle.east);
-  const north = Cesium.Math.toDegrees(rectangle.north);
+  const latitudes = cartographics.map((point) => Cesium.Math.toDegrees(point.latitude));
+  const longitudes = cartographics.map((point) => Cesium.Math.toDegrees(point.longitude));
+  const minLat = Math.min(...latitudes);
+  const maxLat = Math.max(...latitudes);
+  const minLon = Math.min(...longitudes);
+  const maxLon = Math.max(...longitudes);
+  const latSpan = maxLat - minLat;
+  const lonSpan = maxLon - minLon;
+
   if (
-    !Number.isFinite(west) ||
-    !Number.isFinite(south) ||
-    !Number.isFinite(east) ||
-    !Number.isFinite(north)
+    !Number.isFinite(minLat) ||
+    !Number.isFinite(maxLat) ||
+    !Number.isFinite(minLon) ||
+    !Number.isFinite(maxLon) ||
+    latSpan <= 0 ||
+    lonSpan <= 0 ||
+    latSpan > 4 ||
+    lonSpan > 4
   ) {
     return null;
   }
 
-  if (west > east) {
+  const latPadding = Math.max(latSpan * 0.06, 0.0025);
+  const lonPadding = Math.max(lonSpan * 0.06, 0.0025);
+  return {
+    min_lat: Math.max(-90, minLat - latPadding),
+    min_lon: Math.max(-180, minLon - lonPadding),
+    max_lat: Math.min(90, maxLat + latPadding),
+    max_lon: Math.min(180, maxLon + lonPadding),
+  };
+}
+
+function extractViewBounds(Cesium: any, viewer: any) {
+  const canvas = viewer.scene.canvas;
+  const sampleFractions: Array<[number, number]> = [
+    [0.12, 0.2],
+    [0.5, 0.18],
+    [0.88, 0.2],
+    [0.12, 0.45],
+    [0.5, 0.42],
+    [0.88, 0.45],
+    [0.18, 0.72],
+    [0.5, 0.74],
+    [0.82, 0.72],
+    [0.5, 0.9],
+  ];
+  const sampledCartographics = sampleFractions
+    .map(([xFraction, yFraction]) =>
+      pickCartographicAtScreenPoint(
+        Cesium,
+        viewer,
+        canvas.clientWidth * xFraction,
+        canvas.clientHeight * yFraction
+      )
+    )
+    .filter(Boolean);
+
+  const sampledBounds = buildBoundsFromCartographics(Cesium, sampledCartographics);
+  if (sampledBounds) {
+    return sampledBounds;
+  }
+
+  const rectangle = viewer.camera.computeViewRectangle(viewer.scene.globe.ellipsoid);
+  if (rectangle) {
+    const west = Cesium.Math.toDegrees(rectangle.west);
+    const south = Cesium.Math.toDegrees(rectangle.south);
+    const east = Cesium.Math.toDegrees(rectangle.east);
+    const north = Cesium.Math.toDegrees(rectangle.north);
+    const lonSpan = east - west;
+    const latSpan = north - south;
+
+    if (
+      Number.isFinite(west) &&
+      Number.isFinite(south) &&
+      Number.isFinite(east) &&
+      Number.isFinite(north) &&
+      west <= east &&
+      lonSpan > 0 &&
+      latSpan > 0 &&
+      lonSpan < 2 &&
+      latSpan < 2
+    ) {
+      return {
+        min_lat: Math.max(-90, south),
+        min_lon: Math.max(-180, west),
+        max_lat: Math.min(90, north),
+        max_lon: Math.min(180, east),
+      };
+    }
+  }
+
+  const center = new Cesium.Cartesian2(canvas.clientWidth / 2, canvas.clientHeight / 2);
+  const ray = viewer.camera.getPickRay(center);
+  const pickedCartesian =
+    ray ? viewer.scene.globe.pick(ray, viewer.scene) : null;
+  const cartographic = pickedCartesian
+    ? Cesium.Cartographic.fromCartesian(pickedCartesian)
+    : viewer.camera.positionCartographic;
+
+  if (!cartographic) {
     return null;
   }
 
+  const centerLat = Cesium.Math.toDegrees(cartographic.latitude);
+  const centerLon = Cesium.Math.toDegrees(cartographic.longitude);
+  const cameraHeight = Math.max(200, Number(viewer.camera.positionCartographic?.height) || 2000);
+  const latHalfSpan = Math.min(18, Math.max(0.01, cameraHeight / 80000));
+  const lonScale = Math.max(0.2, Math.cos(Cesium.Math.toRadians(centerLat)));
+  const lonHalfSpan = Math.min(24, Math.max(0.01, latHalfSpan / lonScale));
+
   return {
-    min_lat: Math.max(-90, south),
-    min_lon: Math.max(-180, west),
-    max_lat: Math.min(90, north),
-    max_lon: Math.min(180, east),
+    min_lat: Math.max(-90, centerLat - latHalfSpan),
+    min_lon: Math.max(-180, centerLon - lonHalfSpan),
+    max_lat: Math.min(90, centerLat + latHalfSpan),
+    max_lon: Math.min(180, centerLon + lonHalfSpan),
   };
 }
 
@@ -347,6 +469,8 @@ function syncTrailEntities(
   entry: TrailExplorerEntry,
   plannedRoute: PlannedRouteOverlay | null | undefined,
   referenceTrail: PlannedRouteOverlay | null | undefined,
+  nearbyTrails: NearbyTrailOverlay[],
+  activeReferenceTrailId: string | null | undefined,
   onStatus: (value: string) => void,
   options?: {
     zoomToFit?: boolean;
@@ -367,9 +491,32 @@ function syncTrailEntities(
     .filter(
       (point) => Number.isFinite(point[0]) && Number.isFinite(point[1])
     );
+  const validNearbyTrails = nearbyTrails
+    .map((trail) => ({
+      id: trail.id,
+      name: trail.name,
+      lengthMeters: trail.lengthMeters ?? null,
+      coordinates: (trail.points || [])
+        .map((point) => [point.longitude, point.latitude] as const)
+        .filter(
+          (point) => Number.isFinite(point[0]) && Number.isFinite(point[1])
+        ),
+    }))
+    .filter((trail) => trail.coordinates.length);
+  const badgeTrailIds = new Set(
+    validNearbyTrails
+      .filter((trail) => trail.id === activeReferenceTrailId || trail.name)
+      .slice(0, MAX_VISIBLE_TRAIL_BADGES)
+      .map((trail) => trail.id)
+  );
   viewer.entities.removeAll();
 
-  if (!coordinates.length && !plannedCoordinates.length && !referenceTrailCoordinates.length) {
+  if (
+    !coordinates.length &&
+    !plannedCoordinates.length &&
+    !referenceTrailCoordinates.length &&
+    !validNearbyTrails.length
+  ) {
     onStatus("waiting for route data");
     return;
   }
@@ -490,11 +637,84 @@ function syncTrailEntities(
     });
   }
 
+  for (const trail of validNearbyTrails) {
+    const trailPositions = trail.coordinates.map(([longitude, latitude]) =>
+      Cesium.Cartesian3.fromDegrees(longitude, latitude)
+    );
+    const isActive = trail.id === activeReferenceTrailId;
+    const midpoint = trail.coordinates[Math.floor(trail.coordinates.length / 2)];
+    const labelText = [trail.name || "Trail", formatTrailLength(trail.lengthMeters)]
+      .filter(Boolean)
+      .join(" · ");
+    viewer.entities.add({
+      id: getTrailEntityId("line", trail.id),
+      show: isActive,
+      polyline: {
+        positions: trailPositions,
+        width: isActive ? 6 : 4,
+        clampToGround: true,
+        material: isActive
+          ? Cesium.Color.fromCssColorString("#fb923c")
+          : Cesium.Color.fromCssColorString("#38bdf8").withAlpha(0.82),
+      },
+      properties: {
+        trailId: trail.id,
+        trailName: trail.name || "",
+        entityKind: "nearby-trail-line",
+      },
+    });
+
+    if (midpoint && badgeTrailIds.has(trail.id)) {
+      viewer.entities.add({
+        id: getTrailEntityId("badge", trail.id),
+        position: Cesium.Cartesian3.fromDegrees(midpoint[0], midpoint[1]),
+        point: {
+          pixelSize: 10,
+          color: isActive
+            ? Cesium.Color.fromCssColorString("#fb923c")
+            : Cesium.Color.fromCssColorString("#f59e0b"),
+          outlineColor: Cesium.Color.fromCssColorString("#08111b"),
+          outlineWidth: 2,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: 15000,
+        },
+        label: {
+          text: labelText,
+          font: '12px "SF Pro Display", "Segoe UI", sans-serif',
+          fillColor: Cesium.Color.fromCssColorString("#fff7ed"),
+          outlineColor: Cesium.Color.fromCssColorString("#111827"),
+          outlineWidth: 3,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          showBackground: true,
+          backgroundColor: isActive
+            ? Cesium.Color.fromCssColorString("#7c2d12").withAlpha(0.78)
+            : Cesium.Color.fromCssColorString("#78350f").withAlpha(0.72),
+          pixelOffset: new Cesium.Cartesian2(0, -18),
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: 15000,
+          scaleByDistance: new Cesium.NearFarScalar(1000, 1, 18000, 0.6),
+          translucencyByDistance: new Cesium.NearFarScalar(1000, 1, 24000, 0.15),
+        },
+        properties: {
+          trailId: trail.id,
+          trailName: trail.name || "",
+          entityKind: "nearby-trail-badge",
+          trailLength: trail.lengthMeters ?? null,
+        },
+      });
+    }
+  }
+
+  updateHoveredTrailVisuals(viewer, null, activeReferenceTrailId);
+
   if (options?.zoomToFit) {
     flyToEntities(Cesium, viewer, coordinates.length);
   }
   onStatus(
-    referenceTrailCoordinates.length
+    validNearbyTrails.length
+      ? `actual ${coordinates.length || 0} pts, imported ${plannedCoordinates.length || 0} pts, nearby trails ${validNearbyTrails.length}`
+      : referenceTrailCoordinates.length
       ? `actual ${coordinates.length || 0} pts, imported ${plannedCoordinates.length || 0} pts, trail ${referenceTrailCoordinates.length} pts`
       : plannedCoordinates.length
       ? `actual ${coordinates.length || 0} pts, planned ${plannedCoordinates.length} pts`
@@ -506,6 +726,9 @@ export function TrailExplorer3D({
   entry,
   plannedRoute,
   referenceTrail,
+  nearbyTrails = [],
+  activeReferenceTrailId = null,
+  onReferenceTrailSelect = null,
   focusSearchResult,
   imageryMode: controlledImageryMode,
   onImageryModeChange,
@@ -514,6 +737,7 @@ export function TrailExplorer3D({
   lightingEnabled = true,
   onLightingEnabledChange,
   onViewBoundsChange,
+  onCameraMovingChange,
   className,
   showOverlayControls = true,
 }: TrailExplorer3DProps) {
@@ -521,11 +745,15 @@ export function TrailExplorer3D({
   const viewerRef = useRef<any | null>(null);
   const cesiumRef = useRef<any | null>(null);
   const onViewBoundsChangeRef = useRef(onViewBoundsChange);
+  const onCameraMovingChangeRef = useRef(onCameraMovingChange);
   const latestEntryRef = useRef(entry);
   const latestPlannedRouteRef = useRef(plannedRoute);
   const latestReferenceTrailRef = useRef(referenceTrail);
+  const latestNearbyTrailsRef = useRef(nearbyTrails);
+  const latestActiveReferenceTrailIdRef = useRef(activeReferenceTrailId);
+  const onReferenceTrailSelectRef = useRef(onReferenceTrailSelect);
+  const hoveredTrailIdRef = useRef<string | null>(null);
   const lastRenderedRouteKeyRef = useRef<string | null>(null);
-  const lastReferenceTrailKeyRef = useRef<string | null>(null);
   const lastFocusedSearchResultKeyRef = useRef<string | null>(null);
   const lastEmittedBoundsKeyRef = useRef<string | null>(null);
   const [isReady, setIsReady] = useState(false);
@@ -577,16 +805,30 @@ export function TrailExplorer3D({
       ),
     [referenceTrail]
   );
+  const nearbyTrailsKey = useMemo(
+    () =>
+      JSON.stringify(
+        nearbyTrails.map((trail) => ({
+          id: trail.id,
+          points: trail.points.map((point) => [point.longitude, point.latitude]),
+        }))
+      ),
+    [nearbyTrails]
+  );
   const terrainUrl = runtimeConfig.cesiumTerrainUrl.trim();
   const ionToken = runtimeConfig.cesiumIonToken.trim();
   const imageryMode = controlledImageryMode ?? uncontrolledImageryMode;
   const terrainMode = controlledTerrainMode ?? uncontrolledTerrainMode;
-  const routeSceneKey = `${entryKey}::${plannedRouteKey}::${referenceTrailKey}`;
+  const routeSceneKey = `${entryKey}::${plannedRouteKey}::${referenceTrailKey}::${nearbyTrailsKey}::${activeReferenceTrailId ?? "none"}`;
   const zoomSceneKey = `${entryKey}::${plannedRouteKey}`;
 
   useEffect(() => {
     onViewBoundsChangeRef.current = onViewBoundsChange;
   }, [onViewBoundsChange]);
+
+  useEffect(() => {
+    onCameraMovingChangeRef.current = onCameraMovingChange;
+  }, [onCameraMovingChange]);
 
   const emitViewBounds = () => {
     const viewer = viewerRef.current;
@@ -619,6 +861,18 @@ export function TrailExplorer3D({
   useEffect(() => {
     latestReferenceTrailRef.current = referenceTrail;
   }, [referenceTrail, referenceTrailKey]);
+
+  useEffect(() => {
+    latestNearbyTrailsRef.current = nearbyTrails;
+  }, [nearbyTrails, nearbyTrailsKey]);
+
+  useEffect(() => {
+    latestActiveReferenceTrailIdRef.current = activeReferenceTrailId;
+  }, [activeReferenceTrailId]);
+
+  useEffect(() => {
+    onReferenceTrailSelectRef.current = onReferenceTrailSelect;
+  }, [onReferenceTrailSelect]);
 
   useEffect(() => {
     let cancelled = false;
@@ -714,7 +968,38 @@ export function TrailExplorer3D({
         viewer.scene.requestRender?.();
 
         viewerRef.current = viewer;
-        viewer.camera.moveEnd.addEventListener(emitViewBounds);
+        const clickHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+        clickHandler.setInputAction((movement: any) => {
+          const trailId = getTrailIdFromPickedObject(viewer.scene.pick(movement.position));
+          if (trailId) {
+            onReferenceTrailSelectRef.current?.(trailId);
+          }
+        }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+        clickHandler.setInputAction((movement: any) => {
+          const nextHoveredTrailId = getTrailIdFromPickedObject(viewer.scene.pick(movement.endPosition));
+          if (hoveredTrailIdRef.current === nextHoveredTrailId) {
+            return;
+          }
+
+          hoveredTrailIdRef.current = nextHoveredTrailId;
+          updateHoveredTrailVisuals(
+            viewer,
+            nextHoveredTrailId,
+            latestActiveReferenceTrailIdRef.current
+          );
+        }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+        (viewer as any).__jarvisTrailClickHandler = clickHandler;
+        const handleMoveStart = () => {
+          onCameraMovingChangeRef.current?.(true);
+        };
+        const handleMoveEnd = () => {
+          onCameraMovingChangeRef.current?.(false);
+          emitViewBounds();
+        };
+        (viewer as any).__jarvisMoveStartHandler = handleMoveStart;
+        (viewer as any).__jarvisMoveEndHandler = handleMoveEnd;
+        viewer.camera.moveStart.addEventListener(handleMoveStart);
+        viewer.camera.moveEnd.addEventListener(handleMoveEnd);
         flyToProvoValley(Cesium, viewer);
         window.setTimeout(emitViewBounds, 1200);
         setIsReady(true);
@@ -733,12 +1018,23 @@ export function TrailExplorer3D({
     return () => {
       cancelled = true;
       if (viewerRef.current && !viewerRef.current.isDestroyed?.()) {
+        const clickHandler = (viewerRef.current as any).__jarvisTrailClickHandler;
+        clickHandler?.destroy?.();
+        const handleMoveStart = (viewerRef.current as any).__jarvisMoveStartHandler;
+        const handleMoveEnd = (viewerRef.current as any).__jarvisMoveEndHandler;
+        if (handleMoveStart) {
+          viewerRef.current.camera.moveStart.removeEventListener(handleMoveStart);
+        }
+        if (handleMoveEnd) {
+          viewerRef.current.camera.moveEnd.removeEventListener(handleMoveEnd);
+        }
         viewerRef.current.destroy();
       }
       viewerRef.current = null;
       cesiumRef.current = null;
       lastEmittedBoundsKeyRef.current = "null";
       onViewBoundsChangeRef.current?.(null);
+      onCameraMovingChangeRef.current?.(false);
       setIsReady(false);
     };
   }, [ionToken, imageryMode]);
@@ -810,6 +1106,8 @@ export function TrailExplorer3D({
             latestEntryRef.current,
             latestPlannedRouteRef.current,
             latestReferenceTrailRef.current,
+            latestNearbyTrailsRef.current,
+            latestActiveReferenceTrailIdRef.current,
             setStatus,
             { zoomToFit: false }
           );
@@ -824,6 +1122,8 @@ export function TrailExplorer3D({
             latestEntryRef.current,
             latestPlannedRouteRef.current,
             latestReferenceTrailRef.current,
+            latestNearbyTrailsRef.current,
+            latestActiveReferenceTrailIdRef.current,
             setStatus,
             { zoomToFit: false }
           );
@@ -854,39 +1154,21 @@ export function TrailExplorer3D({
       latestEntryRef.current,
       latestPlannedRouteRef.current,
       latestReferenceTrailRef.current,
+      latestNearbyTrailsRef.current,
+      latestActiveReferenceTrailIdRef.current,
       setStatus,
       {
       zoomToFit: shouldZoomToFit,
       }
     );
+    updateHoveredTrailVisuals(
+      viewer,
+      hoveredTrailIdRef.current,
+      latestActiveReferenceTrailIdRef.current
+    );
     window.setTimeout(emitViewBounds, shouldZoomToFit ? 950 : 0);
     lastRenderedRouteKeyRef.current = zoomSceneKey;
   }, [entryKey, plannedRouteKey, referenceTrailKey, routeSceneKey, zoomSceneKey, isReady]);
-
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    const Cesium = cesiumRef.current;
-    if (!viewer || !Cesium || !isReady) {
-      return;
-    }
-
-    if (lastReferenceTrailKeyRef.current === referenceTrailKey) {
-      return;
-    }
-
-    const referenceTrailCoordinates = (referenceTrail?.points || [])
-      .map((point) => [point.longitude, point.latitude] as const)
-      .filter(
-        (point) => Number.isFinite(point[0]) && Number.isFinite(point[1])
-      );
-
-    if (referenceTrailCoordinates.length) {
-      flyToCoordinateSet(Cesium, viewer, referenceTrailCoordinates);
-      window.setTimeout(emitViewBounds, 950);
-    }
-
-    lastReferenceTrailKeyRef.current = referenceTrailKey;
-  }, [referenceTrail, referenceTrailKey, isReady]);
 
   useEffect(() => {
     const viewer = viewerRef.current;

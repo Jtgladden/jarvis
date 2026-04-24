@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Literal
+from typing import Any, Optional, List, Literal
 
 
 class EmailLink(BaseModel):
@@ -594,7 +594,7 @@ class TrailPoint(BaseModel):
 class TrailSearchItem(BaseModel):
     id: str
     name: str
-    source: Literal["usgs", "osm_relation", "osm_way"] = "usgs"
+    source: Literal["usgs", "nps", "osm_relation", "osm_way"] = "usgs"
     trail_type: str = "hiking"
     ref: Optional[str] = None
     operator: Optional[str] = None
@@ -608,6 +608,8 @@ class TrailSearchItem(BaseModel):
 class TrailSearchResponse(BaseModel):
     provider: str = "openstreetmap_overpass"
     count: int = 0
+    source_counts: dict[str, int] = Field(default_factory=dict)
+    debug: dict[str, Any] = Field(default_factory=dict)
     items: List[TrailSearchItem] = Field(default_factory=list)
 
 

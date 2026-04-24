@@ -588,15 +588,20 @@ def trails_search(
     min_lon: float = Query(..., ge=-180, le=180),
     max_lat: float = Query(..., ge=-90, le=90),
     max_lon: float = Query(..., ge=-180, le=180),
-    limit: int = Query(default=12, ge=1, le=25),
+    limit: int = Query(default=12, ge=1, le=60),
 ):
-    return search_openstreetmap_trails(
-        min_lat=min_lat,
-        min_lon=min_lon,
-        max_lat=max_lat,
-        max_lon=max_lon,
-        limit=limit,
-    )
+    try:
+        return search_openstreetmap_trails(
+            min_lat=min_lat,
+            min_lon=min_lon,
+            max_lat=max_lat,
+            max_lon=max_lon,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @api.post("/cleanup/preview", response_model=CleanupJobStartResponse)

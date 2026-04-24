@@ -1067,9 +1067,10 @@ function MobilePageContent() {
       plannedRouteOverlay,
       nearbyTrails: [],
       selectedNearbyTrailId: null,
+      terrainViewBounds: null,
       sourceContext: "mobile",
     });
-    window.open(`/terrain-explorer?session=${encodeURIComponent(sessionId)}`, "_blank", "noopener,noreferrer");
+    window.open(`/terrain-explorer?session=${encodeURIComponent(sessionId)}`, "jarvis-terrain-explorer");
   };
 
   const refreshLiveMovement = useEffectEvent(async () => {

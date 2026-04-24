@@ -1,21 +1,19 @@
 "use client";
 
-import { Suspense, useMemo } from "react";
+import { Suspense, useSyncExternalStore } from "react";
 import { useSearchParams } from "next/navigation";
 import { TerrainExplorerWorkspace } from "@/components/terrain-explorer-workspace";
 import {
-  createDefaultTerrainExplorerSessionPayload,
-  loadTerrainExplorerSession,
+  getTerrainExplorerSessionSnapshot,
 } from "@/components/terrain-explorer-session";
 
 function TerrainExplorerPageInner() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get("session");
-  const payload = useMemo(
-    () =>
-      (sessionId ? loadTerrainExplorerSession(sessionId) : null) ??
-      createDefaultTerrainExplorerSessionPayload(),
-    [sessionId]
+  const payload = useSyncExternalStore(
+    () => () => {},
+    () => getTerrainExplorerSessionSnapshot(sessionId, "desktop"),
+    () => getTerrainExplorerSessionSnapshot(null, "desktop")
   );
 
   return (
@@ -25,6 +23,9 @@ function TerrainExplorerPageInner() {
       initialPlannedRouteOverlay={payload.plannedRouteOverlay}
       initialNearbyTrails={payload.nearbyTrails}
       initialSelectedNearbyTrailId={payload.selectedNearbyTrailId}
+      initialTerrainViewBounds={payload.terrainViewBounds}
+      initialSessionId={sessionId}
+      initialPlannerViewNonce={payload.plannerViewNonce}
     />
   );
 }

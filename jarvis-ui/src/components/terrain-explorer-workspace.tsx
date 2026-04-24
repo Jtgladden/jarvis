@@ -1,21 +1,31 @@
 "use client";
 
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, ExternalLink, GripHorizontal, Search } from "lucide-react";
 import { TrailExplorer3D } from "@/components/trail-explorer-3d";
 import {
   type NearbyTrailItem,
   type PlannedRouteOverlay,
   type TerrainExplorerOption,
+  type TerrainExplorerSessionPayload,
+  type TerrainExplorerViewBounds,
+  persistTerrainExplorerSession,
+  saveTerrainExplorerSession,
+  subscribeTerrainExplorerSession,
 } from "@/components/terrain-explorer-session";
 import { Button } from "@/components/ui/button";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api";
 const MAX_TRAIL_SEARCH_SPAN_DEGREES = 0.35;
+const AUTO_TRAIL_LABEL_SPAN_DEGREES = 0.12;
+const AUTO_TRAIL_SEARCH_DEBOUNCE_MS = 500;
+const DEBUG_Y_MOUNTAIN_OSM_RELATION_ID = "relation-13764771";
 
 type TrailSearchResponse = {
   provider: string;
   count: number;
+  source_counts?: Record<string, number>;
+  debug?: Record<string, unknown>;
   items: NearbyTrailItem[];
 };
 
@@ -97,10 +107,78 @@ function clampTrailSearchBounds(bounds: {
   };
 }
 
+function getBoundsSpan(bounds: {
+  min_lat: number;
+  min_lon: number;
+  max_lat: number;
+  max_lon: number;
+}) {
+  return {
+    latSpan: Math.max(0, bounds.max_lat - bounds.min_lat),
+    lonSpan: Math.max(0, bounds.max_lon - bounds.min_lon),
+  };
+}
+
+function canAutoLoadTrailLabels(bounds: {
+  min_lat: number;
+  min_lon: number;
+  max_lat: number;
+  max_lon: number;
+} | null) {
+  if (!bounds) {
+    return false;
+  }
+
+  const { latSpan, lonSpan } = getBoundsSpan(bounds);
+  return latSpan <= AUTO_TRAIL_LABEL_SPAN_DEGREES && lonSpan <= AUTO_TRAIL_LABEL_SPAN_DEGREES;
+}
+
+function getNearbyTrailProviderLabel(trails: NearbyTrailItem[]) {
+  const hasUsgs = trails.some((trail) => trail.source === "usgs");
+  const hasNps = trails.some((trail) => trail.source === "nps");
+  const hasOsm = trails.some(
+    (trail) => trail.source === "osm_way" || trail.source === "osm_relation"
+  );
+
+  if (hasUsgs && hasNps && hasOsm) {
+    return "USGS + NPS + OSM";
+  }
+  if (hasUsgs && hasNps) {
+    return "USGS + NPS";
+  }
+  if (hasUsgs && hasOsm) {
+    return "USGS + OSM";
+  }
+  if (hasNps && hasOsm) {
+    return "NPS + OSM";
+  }
+  if (hasUsgs) {
+    return "USGS National Map";
+  }
+  if (hasNps) {
+    return "NPS Public Trails";
+  }
+  if (hasOsm) {
+    return "OpenStreetMap hiking fallback";
+  }
+  return "No trails loaded";
+}
+
 async function getErrorMessage(response: Response, fallback: string) {
   try {
-    const data = (await response.json()) as { detail?: string };
-    return data.detail || fallback;
+    const data = (await response.json()) as {
+      detail?: string | Array<{ msg?: string }>;
+    };
+    if (typeof data.detail === "string" && data.detail) {
+      return data.detail;
+    }
+    if (Array.isArray(data.detail) && data.detail.length) {
+      const firstMessage = data.detail
+        .map((item) => item?.msg)
+        .find((value): value is string => Boolean(value));
+      return firstMessage || fallback;
+    }
+    return fallback;
   } catch {
     return fallback;
   }
@@ -116,6 +194,49 @@ function normalizePlannedRoutePoints(
       Math.abs(point.latitude) <= 90 &&
       Math.abs(point.longitude) <= 180
   );
+}
+
+function mergeNearbyTrailSets(
+  existingTrails: NearbyTrailItem[],
+  nextTrails: NearbyTrailItem[]
+) {
+  const merged = new Map<string, NearbyTrailItem>();
+
+  for (const trail of existingTrails) {
+    merged.set(trail.id, trail);
+  }
+
+  for (const trail of nextTrails) {
+    const current = merged.get(trail.id);
+    if (!current) {
+      merged.set(trail.id, trail);
+      continue;
+    }
+
+    merged.set(
+      trail.id,
+      trail.points.length >= current.points.length
+        ? {
+            ...current,
+            ...trail,
+          }
+        : {
+            ...trail,
+            ...current,
+          }
+    );
+  }
+
+  return Array.from(merged.values()).sort((left, right) => {
+    const distanceDelta =
+      (left.distance_from_center_m ?? Number.POSITIVE_INFINITY) -
+      (right.distance_from_center_m ?? Number.POSITIVE_INFINITY);
+    if (distanceDelta !== 0) {
+      return distanceDelta;
+    }
+
+    return left.name.localeCompare(right.name);
+  });
 }
 
 function isLineStringGeometry(
@@ -265,6 +386,9 @@ function formatTrailSourceLabel(trail: NearbyTrailItem) {
   if (trail.source === "usgs") {
     return "USGS official trail";
   }
+  if (trail.source === "nps") {
+    return "NPS public trail";
+  }
   if (trail.source === "osm_relation") {
     return "OSM hiking route";
   }
@@ -410,13 +534,21 @@ export function TerrainExplorerWorkspace({
   initialPlannedRouteOverlay = null,
   initialNearbyTrails = [],
   initialSelectedNearbyTrailId = null,
+  initialTerrainViewBounds = null,
+  initialSessionId = null,
+  initialPlannerViewNonce = 0,
 }: {
   terrainExplorerOptions: TerrainExplorerOption[];
   initialSelectedTerrainExplorerId?: string | null;
   initialPlannedRouteOverlay?: PlannedRouteOverlay | null;
   initialNearbyTrails?: NearbyTrailItem[];
   initialSelectedNearbyTrailId?: string | null;
+  initialTerrainViewBounds?: TerrainExplorerViewBounds | null;
+  initialSessionId?: string | null;
+  initialPlannerViewNonce?: number;
 }) {
+  const [sharedSessionId, setSharedSessionId] = useState<string | null>(initialSessionId);
+  const [plannerViewNonce, setPlannerViewNonce] = useState<number>(initialPlannerViewNonce);
   const [selectedTerrainExplorerId, setSelectedTerrainExplorerId] = useState<string | null>(
     initialSelectedTerrainExplorerId ?? terrainExplorerOptions[0]?.id ?? null
   );
@@ -424,18 +556,21 @@ export function TerrainExplorerWorkspace({
     initialPlannedRouteOverlay
   );
   const [plannedRouteError, setPlannedRouteError] = useState("");
-  const [terrainViewBounds, setTerrainViewBounds] = useState<{
-    min_lat: number;
-    min_lon: number;
-    max_lat: number;
-    max_lon: number;
-  } | null>(null);
+  const plannedRouteOverlayKeyRef = useRef(JSON.stringify(initialPlannedRouteOverlay));
+  const plannerViewNonceRef = useRef(initialPlannerViewNonce);
+  const lastPersistedSessionKeyRef = useRef<string | null>(null);
+  const [terrainViewBounds, setTerrainViewBounds] = useState<TerrainExplorerViewBounds | null>(
+    initialTerrainViewBounds
+  );
   const [nearbyTrails, setNearbyTrails] = useState<NearbyTrailItem[]>(initialNearbyTrails);
   const [nearbyTrailsLoading, setNearbyTrailsLoading] = useState(false);
   const [nearbyTrailsError, setNearbyTrailsError] = useState("");
+  const [nearbyTrailSourceCounts, setNearbyTrailSourceCounts] = useState<Record<string, number>>({});
+  const [nearbyTrailDebug, setNearbyTrailDebug] = useState<Record<string, unknown>>({});
   const [selectedNearbyTrailId, setSelectedNearbyTrailId] = useState<string | null>(
     initialSelectedNearbyTrailId
   );
+  const [cameraMoving, setCameraMoving] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
@@ -447,6 +582,9 @@ export function TerrainExplorerWorkspace({
   const [lightingEnabled, setLightingEnabled] = useState(true);
   const [terrainPanelCollapsed, setTerrainPanelCollapsed] = useState(false);
   const [trailsPanelCollapsed, setTrailsPanelCollapsed] = useState(false);
+  const autoTrailSearchTimeoutRef = useRef<number | null>(null);
+  const lastAutoTrailSearchKeyRef = useRef<string | null>(null);
+  const loadedTrailCoverageRef = useRef<TerrainExplorerViewBounds[]>([]);
 
   const selectedTerrainExplorer =
     terrainExplorerOptions.find((option) => option.id === selectedTerrainExplorerId) ??
@@ -455,6 +593,9 @@ export function TerrainExplorerWorkspace({
   const selectedNearbyTrail = selectedNearbyTrailId
     ? nearbyTrails.find((trail) => trail.id === selectedNearbyTrailId) ?? null
     : null;
+  const yMountainDebugTrail = nearbyTrails.find(
+    (trail) => trail.id === DEBUG_Y_MOUNTAIN_OSM_RELATION_ID
+  );
 
   useEffect(() => {
     if (!terrainExplorerOptions.length) {
@@ -470,6 +611,15 @@ export function TerrainExplorerWorkspace({
   }, [terrainExplorerOptions]);
 
   useEffect(() => {
+    loadedTrailCoverageRef.current = [];
+    lastAutoTrailSearchKeyRef.current = null;
+    setNearbyTrails([]);
+    setSelectedNearbyTrailId(null);
+    setNearbyTrailsError("");
+    setNearbyTrailSourceCounts({});
+  }, [selectedTerrainExplorerId]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -482,28 +632,6 @@ export function TerrainExplorerWorkspace({
 
     applyPhonePanelDefaults();
   }, []);
-
-  const handleTerrainViewBoundsChange = useEffectEvent(
-    (
-      bounds: {
-        min_lat: number;
-        min_lon: number;
-        max_lat: number;
-        max_lon: number;
-      } | null
-    ) => {
-      setTerrainViewBounds((current) => {
-        if (current === bounds) return current;
-        if (!current || !bounds) return bounds;
-        const isSame =
-          Math.abs(current.min_lat - bounds.min_lat) < 0.00001 &&
-          Math.abs(current.min_lon - bounds.min_lon) < 0.00001 &&
-          Math.abs(current.max_lat - bounds.max_lat) < 0.00001 &&
-          Math.abs(current.max_lon - bounds.max_lon) < 0.00001;
-        return isSame ? current : bounds;
-      });
-    }
-  );
 
   const handlePlannedRouteUpload = async (
     event: React.ChangeEvent<HTMLInputElement>
@@ -538,25 +666,26 @@ export function TerrainExplorerWorkspace({
     }
   };
 
-  const searchNearbyTrails = async () => {
-    if (!terrainViewBounds) {
-      setNearbyTrails([]);
-      setSelectedNearbyTrailId(null);
+  const searchNearbyTrails = useCallback(async (
+    boundsOverride?: TerrainExplorerViewBounds | null
+  ) => {
+    const bounds = boundsOverride ?? terrainViewBounds;
+    if (!bounds) {
       setNearbyTrailsError("Move the map to the area you want to search, then try again.");
       return;
     }
 
+    const searchBounds = clampTrailSearchBounds(bounds);
     setNearbyTrailsLoading(true);
     setNearbyTrailsError("");
 
     try {
-      const searchBounds = clampTrailSearchBounds(terrainViewBounds);
       const params = new URLSearchParams({
         min_lat: String(searchBounds.min_lat),
         min_lon: String(searchBounds.min_lon),
         max_lat: String(searchBounds.max_lat),
         max_lon: String(searchBounds.max_lon),
-        limit: "12",
+        limit: "60",
       });
       const response = await fetch(`${API_BASE}/trails/search?${params.toString()}`);
       if (!response.ok) {
@@ -566,21 +695,67 @@ export function TerrainExplorerWorkspace({
       }
 
       const data = (await response.json()) as TrailSearchResponse;
-      setNearbyTrails(data.items || []);
-      setSelectedNearbyTrailId(data.items[0]?.id ?? null);
-      if (!data.items.length) {
-        setNearbyTrailsError("No named hiking trails were returned for this view.");
+      setNearbyTrailSourceCounts(data.source_counts || {});
+      setNearbyTrailDebug(data.debug || {});
+      const exactViewTrails = [...(data.items || [])].sort(
+        (left, right) =>
+          (left.distance_from_center_m ?? Number.POSITIVE_INFINITY) -
+          (right.distance_from_center_m ?? Number.POSITIVE_INFINITY)
+      );
+      setNearbyTrails((current) => mergeNearbyTrailSets(current, exactViewTrails));
+      if (!exactViewTrails.length) {
+        setNearbyTrailsError(
+          nearbyTrails.length
+            ? "No additional named hiking trails were found in this view."
+            : "No named hiking trails were returned for this view."
+        );
       }
     } catch (error) {
-      setNearbyTrails([]);
-      setSelectedNearbyTrailId(null);
       setNearbyTrailsError(
         error instanceof Error ? error.message : "Unable to load nearby trails right now."
       );
     } finally {
       setNearbyTrailsLoading(false);
     }
-  };
+  }, [nearbyTrails.length, terrainViewBounds]);
+
+  useEffect(() => {
+    if (autoTrailSearchTimeoutRef.current !== null) {
+      window.clearTimeout(autoTrailSearchTimeoutRef.current);
+      autoTrailSearchTimeoutRef.current = null;
+    }
+
+    if (!terrainViewBounds) {
+      lastAutoTrailSearchKeyRef.current = null;
+      return;
+    }
+
+    if (!canAutoLoadTrailLabels(terrainViewBounds)) {
+      return;
+    }
+
+    if (cameraMoving) {
+      return;
+    }
+
+    const searchBounds = clampTrailSearchBounds(terrainViewBounds);
+    const nextSearchKey = `${searchBounds.min_lat.toFixed(5)}:${searchBounds.min_lon.toFixed(5)}:${searchBounds.max_lat.toFixed(5)}:${searchBounds.max_lon.toFixed(5)}`;
+    if (lastAutoTrailSearchKeyRef.current === nextSearchKey) {
+      return;
+    }
+
+    autoTrailSearchTimeoutRef.current = window.setTimeout(() => {
+      lastAutoTrailSearchKeyRef.current = nextSearchKey;
+      void searchNearbyTrails(terrainViewBounds);
+    }, AUTO_TRAIL_SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      if (autoTrailSearchTimeoutRef.current !== null) {
+        window.clearTimeout(autoTrailSearchTimeoutRef.current);
+        autoTrailSearchTimeoutRef.current = null;
+      }
+    };
+  }, [cameraMoving, nearbyTrails.length, searchNearbyTrails, terrainViewBounds]);
 
   const runLocationSearch = async () => {
     const query = searchQuery.trim();
@@ -627,6 +802,112 @@ export function TerrainExplorerWorkspace({
     () => selectedTerrainExplorer?.label || "Terrain explorer",
     [selectedTerrainExplorer]
   );
+  const currentSessionPayload = useMemo<TerrainExplorerSessionPayload>(
+    () => ({
+      terrainExplorerOptions,
+      selectedTerrainExplorerId,
+      plannedRouteOverlay,
+      nearbyTrails,
+      selectedNearbyTrailId,
+      terrainViewBounds,
+      plannerViewNonce,
+      sourceContext: "desktop",
+    }),
+    [
+      nearbyTrails,
+      plannerViewNonce,
+      plannedRouteOverlay,
+      selectedNearbyTrailId,
+      selectedTerrainExplorerId,
+      terrainExplorerOptions,
+      terrainViewBounds,
+    ]
+  );
+  const currentSessionPayloadKey = useMemo(
+    () => JSON.stringify(currentSessionPayload),
+    [currentSessionPayload]
+  );
+
+  useEffect(() => {
+    plannedRouteOverlayKeyRef.current = JSON.stringify(plannedRouteOverlay);
+  }, [plannedRouteOverlay]);
+
+  useEffect(() => {
+    plannerViewNonceRef.current = plannerViewNonce;
+  }, [plannerViewNonce]);
+
+  useEffect(() => {
+    if (!sharedSessionId) {
+      return;
+    }
+
+    return subscribeTerrainExplorerSession(sharedSessionId, (payload) => {
+      const nextPlannedRouteKey = JSON.stringify(payload.plannedRouteOverlay);
+      if (nextPlannedRouteKey !== plannedRouteOverlayKeyRef.current) {
+        plannedRouteOverlayKeyRef.current = nextPlannedRouteKey;
+        setPlannedRouteOverlay(payload.plannedRouteOverlay);
+      }
+
+      if (payload.plannerViewNonce !== plannerViewNonceRef.current) {
+        plannerViewNonceRef.current = payload.plannerViewNonce;
+        setPlannerViewNonce(payload.plannerViewNonce);
+      }
+
+      setPlannedRouteError("");
+    });
+  }, [sharedSessionId]);
+
+  useEffect(() => {
+    if (!sharedSessionId) {
+      return;
+    }
+
+    if (lastPersistedSessionKeyRef.current === currentSessionPayloadKey) {
+      return;
+    }
+
+    lastPersistedSessionKeyRef.current = currentSessionPayloadKey;
+    persistTerrainExplorerSession(sharedSessionId, currentSessionPayload);
+  }, [currentSessionPayload, currentSessionPayloadKey, sharedSessionId]);
+
+  const ensureSharedSession = () => {
+    if (sharedSessionId) {
+      persistTerrainExplorerSession(sharedSessionId, currentSessionPayload);
+      return sharedSessionId;
+    }
+
+    const sessionId = saveTerrainExplorerSession(currentSessionPayload);
+    setSharedSessionId(sessionId);
+    return sessionId;
+  };
+
+  const openPlannerWindow = () => {
+    const sessionId = ensureSharedSession();
+    const nextPlannerViewNonce = Date.now();
+    setPlannerViewNonce(nextPlannerViewNonce);
+    persistTerrainExplorerSession(sessionId, {
+      ...currentSessionPayload,
+      plannerViewNonce: nextPlannerViewNonce,
+    });
+    window.open(
+      `/terrain-planner?session=${encodeURIComponent(sessionId)}`,
+      "jarvis-terrain-planner"
+    );
+  };
+
+  const returnToDesktop = () => {
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.location.assign("/");
+        window.opener.focus();
+        return;
+      }
+    } catch {
+      // Fall back to navigating this window.
+    }
+
+    window.location.assign("/");
+  };
 
   if (!selectedTerrainExplorer) {
     return (
@@ -642,6 +923,14 @@ export function TerrainExplorerWorkspace({
         entry={selectedTerrainExplorer.entry}
         plannedRoute={plannedRouteOverlay}
         referenceTrail={selectedNearbyTrail ? trailToOverlay(selectedNearbyTrail) : null}
+        nearbyTrails={nearbyTrails.map((trail) => ({
+          id: trail.id,
+          name: trail.name,
+          lengthMeters: trail.length_m ?? null,
+          points: trail.points,
+        }))}
+        activeReferenceTrailId={selectedNearbyTrailId}
+        onReferenceTrailSelect={(trailId) => setSelectedNearbyTrailId(trailId)}
         focusSearchResult={focusedSearchResult}
         imageryMode={imageryMode}
         onImageryModeChange={setImageryMode}
@@ -649,12 +938,35 @@ export function TerrainExplorerWorkspace({
         onTerrainModeChange={setTerrainMode}
         lightingEnabled={lightingEnabled}
         onLightingEnabledChange={setLightingEnabled}
-        onViewBoundsChange={handleTerrainViewBoundsChange}
+        onViewBoundsChange={(bounds) => {
+          setTerrainViewBounds((current) => {
+            if (current === bounds) return current;
+            if (!current || !bounds) return bounds;
+            const isSame =
+              Math.abs(current.min_lat - bounds.min_lat) < 0.00001 &&
+              Math.abs(current.min_lon - bounds.min_lon) < 0.00001 &&
+              Math.abs(current.max_lat - bounds.max_lat) < 0.00001 &&
+              Math.abs(current.max_lon - bounds.max_lon) < 0.00001;
+            return isSame ? current : bounds;
+          });
+        }}
+        onCameraMovingChange={setCameraMoving}
         showOverlayControls={false}
         className="h-screen min-h-screen rounded-none border-0"
       />
 
       <div className="pointer-events-none absolute inset-0">
+        <div className="pointer-events-auto absolute right-3 top-3 z-30">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="rounded-2xl border-white/10 bg-[rgba(8,11,18,0.78)] text-slate-100 backdrop-blur hover:border-white/20 hover:bg-[rgba(8,11,18,0.9)]"
+            onClick={returnToDesktop}
+          >
+            Return to desktop
+          </Button>
+        </div>
         <DraggableOverlayPanel
           title="Move Terrain Panel"
           collapsedTitle="Terrain"
@@ -777,7 +1089,7 @@ export function TerrainExplorerWorkspace({
           <div className="mt-4 rounded-[1rem] border border-white/8 bg-black/10 p-3">
             <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Planned route overlay</div>
             <div className="mt-1 text-xs text-slate-500">
-              Import a GPX or GeoJSON route to compare it against the active terrain route.
+              Route planning opens in a dedicated 2D map window and starts from the current 3D view.
             </div>
             {plannedRouteOverlay ? (
               <div className="mt-2 text-xs text-emerald-200">
@@ -788,6 +1100,14 @@ export function TerrainExplorerWorkspace({
               <div className="mt-2 text-xs text-rose-200">{plannedRouteError}</div>
             ) : null}
             <div className="mt-3 flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                className="rounded-2xl"
+                onClick={openPlannerWindow}
+              >
+                Open 2D planner
+              </Button>
               <label className="inline-flex cursor-pointer items-center rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-200 transition hover:border-white/20">
                 Import route
                 <input
@@ -825,7 +1145,7 @@ export function TerrainExplorerWorkspace({
             <div>
               <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Trails in view</div>
               <div className="mt-1 text-sm text-slate-300">
-                Search the currently visible terrain view and overlay trail results directly on the globe.
+                Trail labels load automatically when you zoom in close enough, and hover reveals the full trail line.
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -834,10 +1154,14 @@ export function TerrainExplorerWorkspace({
                 size="sm"
                 variant="outline"
                 className="rounded-2xl"
-                onClick={() => void searchNearbyTrails()}
-                disabled={nearbyTrailsLoading}
+                onClick={() => void searchNearbyTrails(undefined, { force: true })}
+                disabled={nearbyTrailsLoading || cameraMoving}
               >
-                {nearbyTrailsLoading ? "Searching..." : "Find trails in view"}
+                {nearbyTrailsLoading
+                  ? "Searching..."
+                  : cameraMoving
+                  ? "Wait for map"
+                  : "Find trails in view"}
               </Button>
               <button
                 type="button"
@@ -852,12 +1176,55 @@ export function TerrainExplorerWorkspace({
 
           <div className="mt-2 text-xs text-slate-400">
             Search area: {terrainViewBounds ? "current map view" : "waiting for map view"}
+            {terrainViewBounds && !canAutoLoadTrailLabels(terrainViewBounds)
+              ? " · zoom in for labels"
+              : " · auto"}
           </div>
           {nearbyTrails.length ? (
             <div className="mt-1 text-xs text-slate-400">
-              Provider: {nearbyTrails[0]?.source === "usgs" ? "USGS National Map" : "OpenStreetMap fallback"}
+              Provider: {getNearbyTrailProviderLabel(nearbyTrails)}
             </div>
           ) : null}
+          {Object.keys(nearbyTrailSourceCounts).length ? (
+            <div className="mt-1 text-xs text-slate-500">
+              Sources in results: USGS {nearbyTrailSourceCounts.usgs ?? 0} · NPS{" "}
+              {nearbyTrailSourceCounts.nps ?? 0} · OSM{" "}
+              {(nearbyTrailSourceCounts.osm_way ?? 0) + (nearbyTrailSourceCounts.osm_relation ?? 0)}
+            </div>
+          ) : null}
+          <div className="mt-1 text-xs text-slate-500">
+            Overpass debug: relation{" "}
+            {Object.keys(nearbyTrailDebug).length
+              ? nearbyTrailDebug.y_mountain_relation_present_in_overpass
+                ? "present"
+                : "missing"
+              : "no data"}{" "}
+            · member ways{" "}
+            {Array.isArray(nearbyTrailDebug.y_mountain_member_way_hits_in_overpass)
+              ? nearbyTrailDebug.y_mountain_member_way_hits_in_overpass.length
+              : 0}{" "}
+            hit · emitted{" "}
+            {Object.keys(nearbyTrailDebug).length
+              ? nearbyTrailDebug.y_mountain_relation_emitted_as_item
+                ? "yes"
+                : "no"
+              : "no data"}
+          </div>
+          {typeof nearbyTrailDebug.osm_error === "string" && nearbyTrailDebug.osm_error ? (
+            <div className="mt-1 text-xs text-amber-200">{nearbyTrailDebug.osm_error}</div>
+          ) : null}
+          {typeof nearbyTrailDebug.osm_payload_remark === "string" &&
+          nearbyTrailDebug.osm_payload_remark ? (
+            <div className="mt-1 text-xs text-amber-200">
+              Overpass remark: {nearbyTrailDebug.osm_payload_remark}
+            </div>
+          ) : null}
+          <div className="mt-1 text-xs text-slate-500">
+            Y Mountain OSM relation `13764771`:{" "}
+            {yMountainDebugTrail
+              ? `loaded (${Math.round(yMountainDebugTrail.distance_from_center_m ?? 0)} m from center)`
+              : "not in current loaded trail set"}
+          </div>
           {nearbyTrailsError ? (
             <div className="mt-2 text-xs text-rose-200">{nearbyTrailsError}</div>
           ) : null}
@@ -918,7 +1285,7 @@ export function TerrainExplorerWorkspace({
                         className="rounded-2xl"
                         onClick={() => setSelectedNearbyTrailId(active ? null : trail.id)}
                       >
-                        {active ? "Overlay active" : "Overlay trail"}
+                        {active ? "Trail selected" : "Open trail"}
                       </Button>
                     </div>
                   </div>

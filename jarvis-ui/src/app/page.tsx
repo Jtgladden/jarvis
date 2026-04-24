@@ -163,7 +163,7 @@ type PlannedRouteOverlay = {
 type NearbyTrailItem = {
   id: string;
   name: string;
-  source: "usgs" | "osm_relation" | "osm_way";
+  source: "usgs" | "nps" | "osm_relation" | "osm_way";
   trail_type: string;
   ref?: string | null;
   operator?: string | null;
@@ -1181,9 +1181,10 @@ function HealthDetailPanel({
       plannedRouteOverlay,
       nearbyTrails: [],
       selectedNearbyTrailId: null,
+      terrainViewBounds: null,
       sourceContext: "desktop",
     });
-    window.open(`/terrain-explorer?session=${encodeURIComponent(sessionId)}`, "_blank", "noopener,noreferrer");
+    window.open(`/terrain-explorer?session=${encodeURIComponent(sessionId)}`, "jarvis-terrain-explorer");
   };
 
   const handlePlannedRouteUpload = async (
