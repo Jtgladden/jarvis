@@ -10,6 +10,8 @@ from uuid import uuid4
 from app.config import APP_DEFAULT_USER_ID, LANGUAGE_DB
 
 _db_lock = Lock()
+SEED_DAILY_WORD_COUNT = 12
+SEED_SCHEDULE_TAG = "seed-scheduled-v2"
 
 
 def _utc_now() -> str:
@@ -27,6 +29,32 @@ def _connect() -> sqlite3.Connection:
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def _rank_from_tags(tags: list[str]) -> int:
+    for tag in tags:
+        if tag.startswith("rank-"):
+            try:
+                return int(tag.removeprefix("rank-"))
+            except ValueError:
+                return 9999
+    return 9999
+
+
+def _seed_next_review_at(rank: int) -> str:
+    rank = max(1, rank)
+    day_offset = (rank - 1) // SEED_DAILY_WORD_COUNT
+    return (
+        datetime.utcnow().replace(microsecond=0) + timedelta(days=day_offset)
+    ).isoformat() + "Z"
+
+
+def _json_tags(value: str | None) -> list[str]:
+    try:
+        tags = json.loads(value or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [str(tag) for tag in tags if str(tag).strip()]
 
 
 def init_language_store() -> None:
@@ -199,6 +227,39 @@ def seed_common_word_records(
                 (now, user_id, language),
             )
 
+        seeded_rows = connection.execute(
+            """
+            SELECT vocab_id, tags
+            FROM language_vocab
+            WHERE user_id = ?
+              AND deleted = 0
+              AND tags LIKE '%common-600%'
+              AND tags LIKE '%common-v2%'
+              AND tags NOT LIKE ?
+              AND last_reviewed_at IS NULL
+            """,
+            (user_id, f"%{SEED_SCHEDULE_TAG}%"),
+        ).fetchall()
+        for row in seeded_rows:
+            tags = _json_tags(row["tags"])
+            rank = _rank_from_tags(tags)
+            if SEED_SCHEDULE_TAG not in tags:
+                tags.append(SEED_SCHEDULE_TAG)
+            connection.execute(
+                """
+                UPDATE language_vocab
+                SET next_review_at = ?, tags = ?, updated_at = ?
+                WHERE user_id = ? AND vocab_id = ?
+                """,
+                (
+                    _seed_next_review_at(rank),
+                    json.dumps(tags),
+                    now,
+                    user_id,
+                    row["vocab_id"],
+                ),
+            )
+
         existing_rows = connection.execute(
             """
             SELECT language, phrase
@@ -229,6 +290,7 @@ def seed_common_word_records(
                     "word",
                     "common-600",
                     "common-v2",
+                    SEED_SCHEDULE_TAG,
                     f"rank-{rank}",
                     part_of_speech,
                 ]
@@ -250,7 +312,7 @@ def seed_common_word_records(
                         json.dumps(tags),
                         now,
                         now,
-                        now,
+                        _seed_next_review_at(rank),
                     ),
                 )
                 existing.add(key)
@@ -305,6 +367,78 @@ def save_vocab_record(
     return row
 
 
+def delete_vocab_record(vocab_id: str, user_id: str = APP_DEFAULT_USER_ID) -> None:
+    now = _utc_now()
+    with _db_lock, closing(_connect()) as connection:
+        connection.execute(
+            """
+            UPDATE language_vocab SET deleted = 1, updated_at = ?
+            WHERE user_id = ? AND vocab_id = ? AND deleted = 0
+            """,
+            (now, user_id, vocab_id),
+        )
+        connection.commit()
+
+
+def update_vocab_record(
+    vocab_id: str,
+    phrase: str,
+    translation: str,
+    notes: str,
+    tags: list[str],
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> sqlite3.Row:
+    now = _utc_now()
+    with _db_lock, closing(_connect()) as connection:
+        connection.execute(
+            """
+            UPDATE language_vocab
+            SET phrase = ?, translation = ?, notes = ?, tags = ?, updated_at = ?
+            WHERE user_id = ? AND vocab_id = ? AND deleted = 0
+            """,
+            (phrase.strip(), translation.strip(), notes.strip(), json.dumps(tags), now, user_id, vocab_id),
+        )
+        row = connection.execute(
+            """
+            SELECT vocab_id, language, phrase, translation, notes, tags, review_count,
+                   last_reviewed_at, next_review_at, created_at, updated_at
+            FROM language_vocab
+            WHERE user_id = ? AND vocab_id = ?
+            """,
+            (user_id, vocab_id),
+        ).fetchone()
+        connection.commit()
+    if row is None:
+        raise RuntimeError("Vocabulary item not found.")
+    return row
+
+
+def get_language_stats(language: str, user_id: str = APP_DEFAULT_USER_ID) -> dict:
+    today = datetime.utcnow().date().isoformat()
+    with _db_lock, closing(_connect()) as connection:
+        lang_row = connection.execute(
+            """
+            SELECT COUNT(*) AS sessions_count, COALESCE(SUM(minutes), 0) AS minutes_practiced
+            FROM language_sessions
+            WHERE user_id = ? AND language = ?
+            """,
+            (user_id, language),
+        ).fetchone()
+        today_row = connection.execute(
+            """
+            SELECT COALESCE(SUM(minutes), 0) AS today_minutes
+            FROM language_sessions
+            WHERE user_id = ? AND language = ? AND created_at LIKE ?
+            """,
+            (user_id, language, f"{today}%"),
+        ).fetchone()
+    return {
+        "language_sessions_count": lang_row["sessions_count"] if lang_row else 0,
+        "language_minutes": lang_row["minutes_practiced"] if lang_row else 0,
+        "today_minutes": today_row["today_minutes"] if today_row else 0,
+    }
+
+
 def review_vocab_record(vocab_id: str, remembered: bool, user_id: str = APP_DEFAULT_USER_ID) -> sqlite3.Row:
     now_dt = datetime.utcnow().replace(microsecond=0)
     now = now_dt.isoformat() + "Z"
@@ -320,8 +454,12 @@ def review_vocab_record(vocab_id: str, remembered: bool, user_id: str = APP_DEFA
         if current is None:
             raise RuntimeError("Vocabulary item not found.")
 
-        next_count = int(current["review_count"]) + 1
-        days_until_next = min(30, 2 ** min(next_count, 5)) if remembered else 1
+        if remembered:
+            next_count = int(current["review_count"]) + 1
+            days_until_next = min(180, 2 ** min(next_count, 7))
+        else:
+            next_count = 0
+            days_until_next = 1
         next_review_at = (now_dt + timedelta(days=days_until_next)).isoformat() + "Z"
         connection.execute(
             """

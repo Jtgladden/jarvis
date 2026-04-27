@@ -35,11 +35,15 @@ from app.schemas import (
     LanguageWritingFeedbackRequest,
     LanguageVocabCreateRequest,
     LanguageVocabItem,
+    LanguageVocabNormalizeResponse,
+    LanguageVocabUpdateRequest,
     LanguageWordExample,
     LanguageWordExplainRequest,
     LanguageWordExplainResponse,
 )
 from app.language_store import (
+    delete_vocab_record,
+    get_language_stats,
     get_profile_record,
     get_word_explanation_record,
     list_session_records,
@@ -50,6 +54,7 @@ from app.language_store import (
     save_profile_record,
     save_session_record,
     save_vocab_record,
+    update_vocab_record,
 )
 from app.user_context import get_default_user_context
 
@@ -108,9 +113,9 @@ STARTER_PROMPTS: dict[LanguageCode, list[LanguagePracticePrompt]] = {
         LanguagePracticePrompt(id="hiligaynon-home", mode="vocabulary", title="Home phrases", prompt="Save five words or phrases you would use at home or with family.", target_phrase="Salamat gid.", translation="Thank you very much.", notes="Gid adds emphasis."),
     ],
     "japanese": [
-        LanguagePracticePrompt(id="japanese-greeting", mode="conversation", title="Polite greeting", prompt="Greet someone, introduce yourself, and say nice to meet you.", target_phrase="はじめまして。", translation="Nice to meet you.", notes="Keep beginner practice in polite style first."),
-        LanguagePracticePrompt(id="japanese-want", mode="grammar", title="I want to do...", prompt="Make three sentences using verb stem + たいです.", target_phrase="日本語を勉強したいです。", translation="I want to study Japanese.", notes="したいです is the polite form of wanting to do something."),
-        LanguagePracticePrompt(id="japanese-shadow", mode="listening", title="Shadowing line", prompt="Read this line aloud five times, then say it without looking.", target_phrase="今日はいい天気ですね。", translation="The weather is nice today.", notes="Use romaji only as a bridge, then phase it out."),
+        LanguagePracticePrompt(id="japanese-greeting", mode="conversation", title="Polite greeting", prompt="Greet someone, introduce yourself, and say nice to meet you.", target_phrase="はじめまして。", romanization="Hajimemashite.", translation="Nice to meet you.", notes="Keep beginner practice in polite style first."),
+        LanguagePracticePrompt(id="japanese-want", mode="grammar", title="I want to do...", prompt="Make three sentences using verb stem + たいです.", target_phrase="日本語を勉強したいです。", romanization="Nihongo o benkyou shitai desu.", translation="I want to study Japanese.", notes="したいです is the polite form of wanting to do something."),
+        LanguagePracticePrompt(id="japanese-shadow", mode="listening", title="Shadowing line", prompt="Read this line aloud five times, then say it without looking.", target_phrase="今日はいい天気ですね。", romanization="Kyou wa ii tenki desu ne.", translation="The weather is nice today.", notes="Use romaji only as a bridge, then phase it out."),
     ],
     "spanish": [
         LanguagePracticePrompt(id="spanish-greeting", mode="conversation", title="Quick check-in", prompt="Greet someone, ask how they are, and say what you are doing today.", target_phrase="¿Cómo estás?", translation="How are you?", notes="Use estoy for temporary states."),
@@ -295,7 +300,13 @@ def get_language_dashboard() -> LanguageDashboardResponse:
     vocab = [_vocab_from_record(row) for row in list_vocab_records(user_id=user_id)]
     sessions = [_session_from_record(row) for row in list_session_records(user_id=user_id)]
     now = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-    due_reviews = sum(1 for item in vocab if not item.next_review_at or item.next_review_at <= now)
+    due_reviews = sum(
+        1
+        for item in vocab
+        if item.language == profile.active_language
+        and (not item.next_review_at or item.next_review_at <= now)
+    )
+    lang_stats = get_language_stats(language=profile.active_language, user_id=user_id)
     return LanguageDashboardResponse(
         profile=profile,
         supported_languages=SUPPORTED_LANGUAGES,
@@ -308,8 +319,32 @@ def get_language_dashboard() -> LanguageDashboardResponse:
             minutes_practiced=sum(session.minutes for session in sessions),
             vocab_count=len(vocab),
             due_reviews=due_reviews,
+            today_minutes=lang_stats["today_minutes"],
+            language_minutes=lang_stats["language_minutes"],
+            language_sessions_count=lang_stats["language_sessions_count"],
         ),
     )
+
+
+def delete_language_vocab(vocab_id: str) -> None:
+    user_id = get_default_user_context().user_id
+    delete_vocab_record(vocab_id=vocab_id, user_id=user_id)
+
+
+def update_language_vocab(vocab_id: str, payload: LanguageVocabUpdateRequest) -> LanguageVocabItem:
+    user_id = get_default_user_context().user_id
+    phrase = payload.phrase.strip()
+    if not phrase:
+        raise ValueError("Vocabulary phrase is required.")
+    row = update_vocab_record(
+        vocab_id=vocab_id,
+        phrase=phrase,
+        translation=payload.translation.strip(),
+        notes=payload.notes.strip(),
+        tags=[tag.strip() for tag in payload.tags if tag.strip()],
+        user_id=user_id,
+    )
+    return _vocab_from_record(row)
 
 
 def update_language_profile(payload: LanguageProfileUpdateRequest) -> LanguageProfile:
@@ -328,20 +363,136 @@ def update_language_profile(payload: LanguageProfileUpdateRequest) -> LanguagePr
     return _profile_from_record(row)
 
 
+def _normalize_vocab_with_ai(payload: LanguageVocabCreateRequest) -> dict[str, Any]:
+    tags = [tag.strip() for tag in payload.tags if tag.strip()]
+    if "word" not in tags:
+        return {
+            "phrase": payload.phrase.strip(),
+            "translation": payload.translation.strip(),
+            "notes": payload.notes.strip(),
+            "tags": tags,
+        }
+
+    try:
+        result = _json_chat_completion(
+            (
+                "You normalize learner-created vocabulary cards. Return only JSON. "
+                "Do not add unrelated meanings. Keep the card beginner-friendly and concise. "
+                "For Japanese, if the learner enters romaji, convert the headword to the most natural "
+                "Japanese writing for a vocabulary card, preferring kana for beginner words unless kanji is essential. "
+                "Always include romaji in notes for Japanese. For Spanish, preserve accents. "
+                "For Tagalog and Hiligaynon, normalize spelling and keep learner-friendly notes. "
+                "If the input is ambiguous, choose the most common beginner meaning and mention ambiguity in notes."
+            ),
+            {
+                "language": payload.language,
+                "input_word": payload.phrase,
+                "input_translation": payload.translation,
+                "input_notes": payload.notes,
+                "input_tags": tags,
+                "schema": {
+                    "phrase": "normalized headword in the target language",
+                    "translation": "short English gloss",
+                    "notes": "short learner note; include Japanese romaji as 'Romaji: ...'",
+                    "tags": ["word", "part-of-speech or helpful category"],
+                },
+            },
+        )
+    except Exception as exc:
+        logger.warning("Vocabulary normalization failed; saving raw entry: %s", exc)
+        return {
+            "phrase": payload.phrase.strip(),
+            "translation": payload.translation.strip(),
+            "notes": payload.notes.strip(),
+            "tags": tags,
+        }
+
+    normalized_tags = [str(tag).strip() for tag in result.get("tags") or [] if str(tag).strip()]
+    if "word" not in normalized_tags:
+        normalized_tags.insert(0, "word")
+    if "ai-normalized" not in normalized_tags:
+        normalized_tags.append("ai-normalized")
+
+    phrase = str(result.get("phrase") or payload.phrase).strip()
+    translation = str(result.get("translation") or payload.translation).strip()
+    notes = str(result.get("notes") or payload.notes).strip()
+    if payload.notes.strip() and payload.notes.strip() not in notes:
+        notes = f"{notes}\nUser note: {payload.notes.strip()}" if notes else payload.notes.strip()
+
+    return {
+        "phrase": phrase,
+        "translation": translation,
+        "notes": notes,
+        "tags": normalized_tags,
+    }
+
+
 def create_language_vocab(payload: LanguageVocabCreateRequest) -> LanguageVocabItem:
     user_id = get_default_user_context().user_id
     phrase = payload.phrase.strip()
     if not phrase:
         raise ValueError("Vocabulary phrase is required.")
+    normalized = _normalize_vocab_with_ai(payload)
     row = save_vocab_record(
         language=payload.language,
-        phrase=phrase,
-        translation=payload.translation.strip(),
-        notes=payload.notes.strip(),
-        tags=[tag.strip() for tag in payload.tags if tag.strip()],
+        phrase=normalized["phrase"],
+        translation=normalized["translation"],
+        notes=normalized["notes"],
+        tags=normalized["tags"],
         user_id=user_id,
     )
     return _vocab_from_record(row)
+
+
+def normalize_existing_language_vocab(max_items: int = 30) -> LanguageVocabNormalizeResponse:
+    user_id = get_default_user_context().user_id
+    profile = _profile_from_record(get_profile_record(user_id=user_id))
+    vocab = [_vocab_from_record(row) for row in list_vocab_records(user_id=user_id)]
+    candidates = [
+        item
+        for item in vocab
+        if item.language == profile.active_language
+        and "word" in item.tags
+        and "ai-normalized" not in item.tags
+        and "common-600" not in item.tags
+    ][:max_items]
+
+    normalized_items: list[LanguageVocabItem] = []
+    skipped_count = 0
+    for item in candidates:
+        normalized = _normalize_vocab_with_ai(
+            LanguageVocabCreateRequest(
+                language=item.language,
+                phrase=item.phrase,
+                translation=item.translation,
+                notes=item.notes,
+                tags=item.tags,
+            )
+        )
+        changed = (
+            normalized["phrase"] != item.phrase
+            or normalized["translation"] != item.translation
+            or normalized["notes"] != item.notes
+            or normalized["tags"] != item.tags
+        )
+        if not changed or "ai-normalized" not in normalized["tags"]:
+            skipped_count += 1
+            continue
+        row = update_vocab_record(
+            vocab_id=item.id,
+            phrase=normalized["phrase"],
+            translation=normalized["translation"],
+            notes=normalized["notes"],
+            tags=normalized["tags"],
+            user_id=user_id,
+        )
+        normalized_items.append(_vocab_from_record(row))
+
+    return LanguageVocabNormalizeResponse(
+        normalized_count=len(normalized_items),
+        skipped_count=skipped_count,
+        items=normalized_items,
+    )
 
 
 def review_language_vocab(vocab_id: str, remembered: bool) -> LanguageVocabItem:
@@ -385,7 +536,7 @@ def generate_language_practice(payload: LanguagePracticeGenerateRequest) -> Lang
             "Return strict JSON with title, overview, suggested_minutes, and prompts. "
             "Prompts must be useful for self-study and may include conversation, vocabulary, "
             "writing, grammar, and listening. Keep explanations concise. For Japanese, include "
-            "kana/kanji when appropriate and romaji only if the learner requests romanization. "
+            "kana/kanji when appropriate and always include romaji in the romanization field. "
             "For Hiligaynon, avoid pretending certainty about rare forms; use common Ilonggo phrases."
         ),
         user_payload={
@@ -407,6 +558,7 @@ def generate_language_practice(payload: LanguagePracticeGenerateRequest) -> Lang
                         "title": "string",
                         "prompt": "string",
                         "target_phrase": "string",
+                        "romanization": "romaji for Japanese target phrase, otherwise empty string",
                         "translation": "string",
                         "notes": "string",
                         "expected_answer": "string",
@@ -428,6 +580,7 @@ def generate_language_practice(payload: LanguagePracticeGenerateRequest) -> Lang
                 title=str(item.get("title") or "Practice prompt"),
                 prompt=str(item.get("prompt") or ""),
                 target_phrase=str(item.get("target_phrase") or ""),
+                romanization=str(item.get("romanization") or ""),
                 translation=str(item.get("translation") or ""),
                 notes=str(item.get("notes") or ""),
                 expected_answer=str(item.get("expected_answer") or ""),
@@ -566,7 +719,8 @@ def create_language_conversation_reply(payload: LanguageConversationRequest) -> 
             "target language while giving compact corrections. Return strict JSON. The reply should "
             "be in the target language. The translation should be in English. Correction should be "
             "short and can be empty if the user's message was fine. Suggested user reply should be "
-            "a natural next response the learner can say."
+            "a natural next response the learner can say. For Japanese, always include romaji for "
+            "the assistant reply and suggested user reply."
         ),
         user_payload={
             "language": language_name,
@@ -577,9 +731,11 @@ def create_language_conversation_reply(payload: LanguageConversationRequest) -> 
             "history": [message.model_dump() for message in payload.history[-8:]],
             "json_shape": {
                 "reply": "string in target language",
+                "reply_romanization": "romaji for Japanese reply, otherwise empty string",
                 "translation": "English translation",
                 "correction": "brief correction",
                 "suggested_user_reply": "string in target language",
+                "suggested_user_reply_romanization": "romaji for Japanese suggested reply, otherwise empty string",
                 "vocab": [
                     {
                         "phrase": "string",
@@ -607,9 +763,11 @@ def create_language_conversation_reply(payload: LanguageConversationRequest) -> 
         )
     return LanguageConversationResponse(
         reply=str(result.get("reply") or ""),
+        reply_romanization=str(result.get("reply_romanization") or ""),
         translation=str(result.get("translation") or ""),
         correction=str(result.get("correction") or ""),
         suggested_user_reply=str(result.get("suggested_user_reply") or ""),
+        suggested_user_reply_romanization=str(result.get("suggested_user_reply_romanization") or ""),
         vocab=vocab_items[:5],
     )
 

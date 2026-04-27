@@ -711,6 +711,7 @@ class LanguagePracticePrompt(BaseModel):
     title: str
     prompt: str
     target_phrase: str = ""
+    romanization: str = ""
     translation: str = ""
     notes: str = ""
     expected_answer: str = ""
@@ -742,6 +743,19 @@ class LanguageVocabReviewRequest(BaseModel):
     remembered: bool = True
 
 
+class LanguageVocabUpdateRequest(BaseModel):
+    phrase: str = ""
+    translation: str = ""
+    notes: str = ""
+    tags: List[str] = Field(default_factory=list)
+
+
+class LanguageVocabNormalizeResponse(BaseModel):
+    normalized_count: int = 0
+    skipped_count: int = 0
+    items: List[LanguageVocabItem] = Field(default_factory=list)
+
+
 class LanguagePracticeSession(BaseModel):
     id: str
     language: LanguageCode
@@ -763,6 +777,9 @@ class LanguageProgressSummary(BaseModel):
     minutes_practiced: int = 0
     vocab_count: int = 0
     due_reviews: int = 0
+    today_minutes: int = 0
+    language_minutes: int = 0
+    language_sessions_count: int = 0
 
 
 class LanguageDashboardResponse(BaseModel):
@@ -833,9 +850,11 @@ class LanguageConversationRequest(BaseModel):
 
 class LanguageConversationResponse(BaseModel):
     reply: str = ""
+    reply_romanization: str = ""
     translation: str = ""
     correction: str = ""
     suggested_user_reply: str = ""
+    suggested_user_reply_romanization: str = ""
     vocab: List[LanguageVocabItem] = Field(default_factory=list)
 
 

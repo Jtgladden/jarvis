@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   BookOpen,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Languages,
   MessageCircle,
   Mic,
@@ -13,7 +15,6 @@ import {
   Plus,
   RefreshCw,
   Save,
-  Square,
   Wand2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -26,8 +27,26 @@ const VOCAB_PAGE_SIZE = 50;
 
 type LanguageCode = "tagalog" | "hiligaynon" | "japanese" | "spanish";
 type LanguageLevel = "beginner" | "elementary" | "intermediate" | "advanced";
-type LanguageTab = "practice" | "conversation" | "voice" | "words" | "phrases" | "review";
+type LanguageTab = "practice" | "conversation" | "voice" | "hiragana" | "words" | "phrases" | "review";
 type WordPracticeMode = "flashcard" | "target-to-english" | "english-to-target";
+
+type HiraganaCharacter = {
+  kana: string;
+  romaji: string;
+};
+
+type HiraganaRow = {
+  label: string;
+  sounds: string;
+  characters: HiraganaCharacter[];
+};
+
+type HiraganaWeek = {
+  week: number;
+  title: string;
+  rows: HiraganaRow[];
+  drill: string;
+};
 
 type LanguageMetadata = {
   code: LanguageCode;
@@ -54,6 +73,7 @@ type LanguagePracticePrompt = {
   title: string;
   prompt: string;
   target_phrase: string;
+  romanization: string;
   translation: string;
   notes: string;
   expected_answer: string;
@@ -91,6 +111,9 @@ type LanguageDashboardResponse = {
     minutes_practiced: number;
     vocab_count: number;
     due_reviews: number;
+    today_minutes: number;
+    language_minutes: number;
+    language_sessions_count: number;
   };
 };
 
@@ -117,15 +140,28 @@ type LanguageFeedback = {
 type ConversationMessage = {
   role: "user" | "assistant";
   content: string;
+  romanization?: string;
   translation?: string;
   correction?: string;
+  suggestedReply?: string;
+  suggestedReplyRomanization?: string;
+  vocab?: LanguageVocabItem[];
+};
+
+type LanguageVocabUpdateRequest = {
+  phrase: string;
+  translation: string;
+  notes: string;
+  tags: string[];
 };
 
 type ConversationResponse = {
   reply: string;
+  reply_romanization: string;
   translation: string;
   correction: string;
   suggested_user_reply: string;
+  suggested_user_reply_romanization: string;
   vocab: LanguageVocabItem[];
 };
 
@@ -155,6 +191,137 @@ const EMPTY_PROFILE: LanguageProfile = {
   romanization: true,
 };
 
+const EMPTY_LANGUAGE_SECONDS: Record<LanguageCode, number> = {
+  tagalog: 0,
+  hiligaynon: 0,
+  japanese: 0,
+  spanish: 0,
+};
+
+const HIRAGANA_WEEKS: HiraganaWeek[] = [
+  {
+    week: 1,
+    title: "A-row + K-row",
+    rows: [
+      { label: "A-row", sounds: "a i u e o", characters: [
+        { kana: "あ", romaji: "a" },
+        { kana: "い", romaji: "i" },
+        { kana: "う", romaji: "u" },
+        { kana: "え", romaji: "e" },
+        { kana: "お", romaji: "o" },
+      ] },
+      { label: "K-row", sounds: "ka ki ku ke ko", characters: [
+        { kana: "か", romaji: "ka" },
+        { kana: "き", romaji: "ki" },
+        { kana: "く", romaji: "ku" },
+        { kana: "け", romaji: "ke" },
+        { kana: "こ", romaji: "ko" },
+      ] },
+    ],
+    drill: "Read across each row, then mix the ten cards until the sound is instant.",
+  },
+  {
+    week: 2,
+    title: "S-row + T-row",
+    rows: [
+      { label: "S-row", sounds: "sa shi su se so", characters: [
+        { kana: "さ", romaji: "sa" },
+        { kana: "し", romaji: "shi" },
+        { kana: "す", romaji: "su" },
+        { kana: "せ", romaji: "se" },
+        { kana: "そ", romaji: "so" },
+      ] },
+      { label: "T-row", sounds: "ta chi tsu te to", characters: [
+        { kana: "た", romaji: "ta" },
+        { kana: "ち", romaji: "chi" },
+        { kana: "つ", romaji: "tsu" },
+        { kana: "て", romaji: "te" },
+        { kana: "と", romaji: "to" },
+      ] },
+    ],
+    drill: "Pay extra attention to shi, chi, and tsu. Say them aloud before typing.",
+  },
+  {
+    week: 3,
+    title: "N-row + H-row",
+    rows: [
+      { label: "N-row", sounds: "na ni nu ne no", characters: [
+        { kana: "な", romaji: "na" },
+        { kana: "に", romaji: "ni" },
+        { kana: "ぬ", romaji: "nu" },
+        { kana: "ね", romaji: "ne" },
+        { kana: "の", romaji: "no" },
+      ] },
+      { label: "H-row", sounds: "ha hi fu he ho", characters: [
+        { kana: "は", romaji: "ha" },
+        { kana: "ひ", romaji: "hi" },
+        { kana: "ふ", romaji: "fu" },
+        { kana: "へ", romaji: "he" },
+        { kana: "ほ", romaji: "ho" },
+      ] },
+    ],
+    drill: "Contrast nu, ne, and no visually. Then practice h-row with a soft fu sound.",
+  },
+  {
+    week: 4,
+    title: "M-row + Y-row",
+    rows: [
+      { label: "M-row", sounds: "ma mi mu me mo", characters: [
+        { kana: "ま", romaji: "ma" },
+        { kana: "み", romaji: "mi" },
+        { kana: "む", romaji: "mu" },
+        { kana: "め", romaji: "me" },
+        { kana: "も", romaji: "mo" },
+      ] },
+      { label: "Y-row", sounds: "ya yu yo", characters: [
+        { kana: "や", romaji: "ya" },
+        { kana: "ゆ", romaji: "yu" },
+        { kana: "よ", romaji: "yo" },
+      ] },
+    ],
+    drill: "Mix the three y-row cards with m-row so the shorter row still gets repeated.",
+  },
+  {
+    week: 5,
+    title: "R-row + W/N-row",
+    rows: [
+      { label: "R-row", sounds: "ra ri ru re ro", characters: [
+        { kana: "ら", romaji: "ra" },
+        { kana: "り", romaji: "ri" },
+        { kana: "る", romaji: "ru" },
+        { kana: "れ", romaji: "re" },
+        { kana: "ろ", romaji: "ro" },
+      ] },
+      { label: "W/N-row", sounds: "wa o n", characters: [
+        { kana: "わ", romaji: "wa" },
+        { kana: "を", romaji: "o" },
+        { kana: "ん", romaji: "n" },
+      ] },
+    ],
+    drill: "Treat を as the object-particle o for now, then drill ん at the end of sample syllables.",
+  },
+  {
+    week: 6,
+    title: "Dakuten + Handakuten",
+    rows: [
+      { label: "Dakuten", sounds: "g z d b rows", characters: [
+        { kana: "が", romaji: "ga" },
+        { kana: "ざ", romaji: "za" },
+        { kana: "だ", romaji: "da" },
+        { kana: "ば", romaji: "ba" },
+      ] },
+      { label: "Handakuten", sounds: "p row", characters: [
+        { kana: "ぱ", romaji: "pa" },
+        { kana: "ぴ", romaji: "pi" },
+        { kana: "ぷ", romaji: "pu" },
+        { kana: "ぺ", romaji: "pe" },
+        { kana: "ぽ", romaji: "po" },
+      ] },
+    ],
+    drill: "Use this week to learn how marks change sounds, then fold marked kana into the earlier rows.",
+  },
+];
+
 function formatLanguageName(code: LanguageCode, languages: LanguageMetadata[]) {
   return languages.find((language) => language.code === code)?.name ?? code;
 }
@@ -181,6 +348,32 @@ function normalizeAnswer(value: string) {
     .replace(/\s+/g, " ");
 }
 
+function stableHash(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
+function seededRandom(seed: number) {
+  let value = seed || 1;
+  return () => {
+    value = (value * 1664525 + 1013904223) >>> 0;
+    return value / 4294967296;
+  };
+}
+
+function shuffleWithSeed<T>(items: T[], seed: number) {
+  const shuffled = [...items];
+  const random = seededRandom(seed);
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+}
+
 function getWordPracticeKey(item: LanguageVocabItem) {
   return [
     item.language,
@@ -189,12 +382,20 @@ function getWordPracticeKey(item: LanguageVocabItem) {
   ].join(":");
 }
 
+function formatSessionDuration(seconds: number) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m === 0) return `${s}s`;
+  return `${m}m ${s.toString().padStart(2, "0")}s`;
+}
+
 function isVisibleVocabTag(tag: string) {
   return (
     tag !== "word" &&
     tag !== "phrase" &&
     tag !== "common-600" &&
     tag !== "common-v2" &&
+    tag !== "ai-normalized" &&
     !tag.startsWith("rank-")
   );
 }
@@ -205,14 +406,18 @@ export default function LanguagePage() {
   const [loading, setLoading] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
   const [vocabSaving, setVocabSaving] = useState(false);
+  const [vocabNormalizing, setVocabNormalizing] = useState(false);
   const [sessionSaving, setSessionSaving] = useState(false);
   const [error, setError] = useState("");
   const [phrase, setPhrase] = useState("");
   const [translation, setTranslation] = useState("");
   const [notes, setNotes] = useState("");
   const [tags, setTags] = useState("");
-  const [sessionMinutes, setSessionMinutes] = useState("15");
   const [sessionNotes, setSessionNotes] = useState("");
+  const [currentSessionSeconds, setCurrentSessionSeconds] = useState(0);
+  const profileRef = useRef(profile);
+  const activeSecondsRef = useRef<Record<LanguageCode, number>>({ ...EMPTY_LANGUAGE_SECONDS });
+  const lastLoggedSecondsRef = useRef<Record<LanguageCode, number>>({ ...EMPTY_LANGUAGE_SECONDS });
   const [practiceFocus, setPracticeFocus] = useState("");
   const [generatedPractice, setGeneratedPractice] = useState<GeneratedPractice | null>(null);
   const [generatingPractice, setGeneratingPractice] = useState(false);
@@ -240,6 +445,24 @@ export default function LanguagePage() {
   const [wordExplanationLoadingId, setWordExplanationLoadingId] = useState<string | null>(null);
   const [vocabSearch, setVocabSearch] = useState("");
   const [visibleVocabCount, setVisibleVocabCount] = useState(VOCAB_PAGE_SIZE);
+  const [profileExpanded, setProfileExpanded] = useState(false);
+  const [editingVocabId, setEditingVocabId] = useState<string | null>(null);
+  const [editPhrase, setEditPhrase] = useState("");
+  const [editTranslation, setEditTranslation] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  const [vocabUpdating, setVocabUpdating] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [vocabDeleting, setVocabDeleting] = useState<string | null>(null);
+  const [savingConvVocab, setSavingConvVocab] = useState<string | null>(null);
+  const [shuffledWordPracticeDeck, setShuffledWordPracticeDeck] = useState<LanguageVocabItem[]>([]);
+  const [reviewIndex, setReviewIndex] = useState(0);
+  const [reviewRevealed, setReviewRevealed] = useState(false);
+  const [hiraganaWeekIndex, setHiraganaWeekIndex] = useState(0);
+  const [hiraganaPracticeIndex, setHiraganaPracticeIndex] = useState(0);
+  const [hiraganaAnswer, setHiraganaAnswer] = useState("");
+  const [hiraganaChecked, setHiraganaChecked] = useState(false);
+  const [hiraganaRandomized, setHiraganaRandomized] = useState(false);
+  const [hiraganaShuffleSeed, setHiraganaShuffleSeed] = useState(1);
 
   const activeLanguage = useMemo(
     () => dashboard?.supported_languages.find((language) => language.code === profile.active_language) ?? null,
@@ -293,6 +516,15 @@ export default function LanguagePage() {
     }
     return deck;
   }, [wordVocab]);
+  const unenrichedWordCount = useMemo(
+    () =>
+      wordVocab.filter(
+        (item) =>
+          !item.tags.includes("ai-normalized") &&
+          !item.tags.includes("common-600")
+      ).length,
+    [wordVocab]
+  );
   const activeVocabKind = activeTab === "words" ? "word" : "phrase";
   const activeVocabItems = activeVocabKind === "word" ? wordVocab : phraseVocab;
   const filteredVocabItems = useMemo(() => {
@@ -308,8 +540,8 @@ export default function LanguagePage() {
     );
   }, [activeVocabItems, vocabSearch]);
   const visibleVocabItems = filteredVocabItems.slice(0, visibleVocabCount);
-  const currentPracticeWord = wordPracticeDeck.length
-    ? wordPracticeDeck[Math.min(wordPracticeIndex, wordPracticeDeck.length - 1)]
+  const currentPracticeWord = shuffledWordPracticeDeck.length
+    ? shuffledWordPracticeDeck[Math.min(wordPracticeIndex, shuffledWordPracticeDeck.length - 1)]
     : null;
   const expectedWordAnswer = currentPracticeWord
     ? wordPracticeMode === "english-to-target"
@@ -319,6 +551,23 @@ export default function LanguagePage() {
   const wordAnswerCorrect =
     Boolean(wordPracticeAnswer.trim()) &&
     normalizeAnswer(wordPracticeAnswer) === normalizeAnswer(expectedWordAnswer);
+  const currentHiraganaWeek = HIRAGANA_WEEKS[hiraganaWeekIndex] ?? HIRAGANA_WEEKS[0];
+  const hiraganaPracticeDeck = useMemo(() => {
+    const deck = currentHiraganaWeek.rows.flatMap((row) => row.characters);
+    if (!hiraganaRandomized) return deck;
+    return shuffleWithSeed(
+      deck,
+      stableHash(`${currentHiraganaWeek.week}:${hiraganaShuffleSeed}`)
+    );
+  }, [currentHiraganaWeek, hiraganaRandomized, hiraganaShuffleSeed]);
+  const currentHiraganaCard = hiraganaPracticeDeck.length
+    ? hiraganaPracticeDeck[Math.min(hiraganaPracticeIndex, hiraganaPracticeDeck.length - 1)]
+    : null;
+  const hiraganaAnswerCorrect =
+    Boolean(hiraganaAnswer.trim()) &&
+    (currentHiraganaCard
+      ? normalizeAnswer(hiraganaAnswer) === normalizeAnswer(currentHiraganaCard.romaji)
+      : false);
 
   const loadDashboard = async () => {
     setLoading(true);
@@ -331,7 +580,6 @@ export default function LanguagePage() {
       const data: LanguageDashboardResponse = await response.json();
       setDashboard(data);
       setProfile(data.profile);
-      setSessionMinutes(String(data.profile.daily_goal_minutes));
       setSelectedPromptId((current) => current || data.daily_prompts[0]?.id || "");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load language practice.");
@@ -421,8 +669,8 @@ export default function LanguagePage() {
 
   const advanceWordPractice = () => {
     setWordPracticeIndex((current) => {
-      if (!wordPracticeDeck.length) return 0;
-      return (current + 1) % wordPracticeDeck.length;
+      if (!shuffledWordPracticeDeck.length) return 0;
+      return (current + 1) % shuffledWordPracticeDeck.length;
     });
     setWordPracticeRevealed(false);
     setWordPracticeAnswer("");
@@ -450,10 +698,10 @@ export default function LanguagePage() {
   };
 
   useEffect(() => {
-    if (wordPracticeIndex > 0 && wordPracticeIndex >= wordPracticeDeck.length) {
+    if (wordPracticeIndex > 0 && wordPracticeIndex >= shuffledWordPracticeDeck.length) {
       setWordPracticeIndex(0);
     }
-  }, [wordPracticeIndex, wordPracticeDeck.length]);
+  }, [wordPracticeIndex, shuffledWordPracticeDeck.length]);
 
   useEffect(() => {
     setWordPracticeIndex(0);
@@ -475,23 +723,158 @@ export default function LanguagePage() {
     }
   }, [dailyFocusWords.length, focusWordIndex]);
 
-  const logSession = async (mode: LanguagePracticeSession["mode"] = "daily") => {
-    setSessionSaving(true);
-    setError("");
-    try {
+  useEffect(() => {
+    const deck = [...wordPracticeDeck];
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    setShuffledWordPracticeDeck(deck);
+    setWordPracticeIndex(0);
+    setWordPracticeRevealed(false);
+    setWordPracticeAnswer("");
+    setWordPracticeChecked(false);
+  }, [wordPracticeDeck]);
+
+  useEffect(() => {
+    setHiraganaPracticeIndex(0);
+    setHiraganaAnswer("");
+    setHiraganaChecked(false);
+  }, [hiraganaWeekIndex, hiraganaRandomized, hiraganaShuffleSeed]);
+
+  const advanceHiraganaPractice = () => {
+    setHiraganaPracticeIndex((current) => {
+      if (!hiraganaPracticeDeck.length) return 0;
+      return (current + 1) % hiraganaPracticeDeck.length;
+    });
+    setHiraganaAnswer("");
+    setHiraganaChecked(false);
+  };
+
+  const saveTrackedSession = useCallback(
+    async (language: LanguageCode, minutes: number, notes: string) => {
       const response = await fetch(`${API_BASE}/languages/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          language: profile.active_language,
-          mode,
-          minutes: Number(sessionMinutes) || profile.daily_goal_minutes,
-          notes: sessionNotes,
+          language,
+          mode: "daily",
+          minutes,
+          notes,
         }),
       });
       if (!response.ok) {
         throw new Error(`Session log failed with status ${response.status}`);
       }
+    },
+    []
+  );
+
+  const autoSaveSession = useCallback((notes = "Auto-tracked", language = profileRef.current.active_language) => {
+    const activeSeconds = activeSecondsRef.current[language] || 0;
+    const lastLoggedSeconds = lastLoggedSecondsRef.current[language] || 0;
+    const unloggedSeconds = activeSeconds - lastLoggedSeconds;
+    const minutes = Math.floor(unloggedSeconds / 60);
+    if (minutes < 1) return;
+    lastLoggedSecondsRef.current[language] = lastLoggedSeconds + minutes * 60;
+    void fetch(`${API_BASE}/languages/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        language,
+        mode: "daily",
+        minutes,
+        notes,
+      }),
+    });
+  }, []);
+
+  const switchActiveLanguage = async (code: LanguageCode) => {
+    const previousLanguage = profile.active_language;
+    autoSaveSession("Auto-saved before switching languages", previousLanguage);
+    const newProfile = { ...profile, active_language: code };
+    profileRef.current = newProfile;
+    setProfile(newProfile);
+    setCurrentSessionSeconds(activeSecondsRef.current[code] || 0);
+    try {
+      await fetch(`${API_BASE}/languages/profile`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newProfile),
+      });
+      await loadDashboard();
+    } catch {
+      // state already updated; dashboard reload failure is non-fatal
+    }
+  };
+
+  useEffect(() => {
+    profileRef.current = profile;
+    setCurrentSessionSeconds(activeSecondsRef.current[profile.active_language] || 0);
+  }, [profile]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      const language = profileRef.current.active_language;
+      activeSecondsRef.current[language] = (activeSecondsRef.current[language] || 0) + 1;
+      setCurrentSessionSeconds(activeSecondsRef.current[language]);
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const flushWithBeacon = () => {
+      (Object.keys(activeSecondsRef.current) as LanguageCode[]).forEach((language) => {
+        const activeSeconds = activeSecondsRef.current[language] || 0;
+        const lastLoggedSeconds = lastLoggedSecondsRef.current[language] || 0;
+        const minutes = Math.floor((activeSeconds - lastLoggedSeconds) / 60);
+        if (minutes < 1) return;
+        lastLoggedSecondsRef.current[language] = lastLoggedSeconds + minutes * 60;
+
+        const body = JSON.stringify({
+          language,
+          mode: "daily",
+          minutes,
+          notes: sessionNotes || "Auto-tracked on close",
+        });
+        const blob = new Blob([body], { type: "application/json" });
+        navigator.sendBeacon(`${API_BASE}/languages/sessions`, blob);
+      });
+    };
+
+    window.addEventListener("beforeunload", flushWithBeacon);
+    return () => {
+      window.removeEventListener("beforeunload", flushWithBeacon);
+    };
+  }, [sessionNotes]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      autoSaveSession("Auto-saved while practicing");
+    }, 15 * 60 * 1000);
+
+    return () => window.clearInterval(interval);
+  }, [autoSaveSession]);
+
+  const endSession = async () => {
+    const language = profile.active_language;
+    const activeSeconds = activeSecondsRef.current[language] || 0;
+    const lastLoggedSeconds = lastLoggedSecondsRef.current[language] || 0;
+    const unloggedSeconds = activeSeconds - lastLoggedSeconds;
+    const unlogged = unloggedSeconds >= 30 ? Math.max(1, Math.round(unloggedSeconds / 60)) : 0;
+    setSessionSaving(true);
+    setError("");
+    try {
+      if (unlogged >= 1) {
+        await saveTrackedSession(language, unlogged, sessionNotes || "Auto-tracked");
+      }
+      activeSecondsRef.current[language] = 0;
+      lastLoggedSecondsRef.current[language] = 0;
+      setCurrentSessionSeconds(0);
       setSessionNotes("");
       await loadDashboard();
     } catch (err) {
@@ -522,7 +905,6 @@ export default function LanguagePage() {
       const data: GeneratedPractice = await response.json();
       setGeneratedPractice(data);
       setSelectedPromptId(data.prompts[0]?.id || "");
-      setSessionMinutes(String(data.suggested_minutes || profile.daily_goal_minutes));
       setFeedback(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to generate practice.");
@@ -678,13 +1060,14 @@ export default function LanguagePage() {
         {
           role: "assistant",
           content: data.reply,
+          romanization: data.reply_romanization || undefined,
           translation: data.translation,
           correction: data.correction,
+          suggestedReply: data.suggested_user_reply || undefined,
+          suggestedReplyRomanization: data.suggested_user_reply_romanization || undefined,
+          vocab: data.vocab?.length ? data.vocab : undefined,
         },
       ]);
-      if (data.suggested_user_reply) {
-        setWritingResponse(data.suggested_user_reply);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to continue the conversation.");
     } finally {
@@ -720,6 +1103,95 @@ export default function LanguagePage() {
       setError(err instanceof Error ? err.message : "Unable to explain that word.");
     } finally {
       setWordExplanationLoadingId(null);
+    }
+  };
+
+  const deleteVocab = async (id: string) => {
+    setVocabDeleting(id);
+    setConfirmDeleteId(null);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/languages/vocab/${id}`, { method: "DELETE" });
+      if (!response.ok && response.status !== 204) {
+        throw new Error(`Delete failed with status ${response.status}`);
+      }
+      await loadDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete vocabulary item.");
+    } finally {
+      setVocabDeleting(null);
+    }
+  };
+
+  const normalizeExistingWords = async () => {
+    setVocabNormalizing(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/languages/vocab/normalize-existing`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error(`Normalize failed with status ${response.status}`);
+      }
+      await loadDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to normalize existing words.");
+    } finally {
+      setVocabNormalizing(false);
+    }
+  };
+
+  const updateVocab = async (id: string) => {
+    if (!editPhrase.trim()) return;
+    setVocabUpdating(true);
+    setError("");
+    try {
+      const payload: LanguageVocabUpdateRequest = {
+        phrase: editPhrase,
+        translation: editTranslation,
+        notes: editNotes,
+        tags: activeVocabKind === "word" ? ["word"] : [],
+      };
+      const response = await fetch(`${API_BASE}/languages/vocab/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw new Error(`Update failed with status ${response.status}`);
+      }
+      setEditingVocabId(null);
+      await loadDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update vocabulary item.");
+    } finally {
+      setVocabUpdating(false);
+    }
+  };
+
+  const saveConversationVocab = async (item: LanguageVocabItem) => {
+    setSavingConvVocab(item.phrase);
+    setError("");
+    try {
+      const response = await fetch(`${API_BASE}/languages/vocab`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          language: profile.active_language,
+          phrase: item.phrase,
+          translation: item.translation,
+          notes: item.notes,
+          tags: item.tags.length ? item.tags : ["conversation"],
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`Save failed with status ${response.status}`);
+      }
+      await loadDashboard();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to save vocabulary.");
+    } finally {
+      setSavingConvVocab(null);
     }
   };
 
@@ -815,7 +1287,22 @@ export default function LanguagePage() {
               Practice Tagalog, Hiligaynon, Japanese, and Spanish with daily prompts, saved phrases, review timing, and lightweight session tracking.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {dashboard?.supported_languages.length ? (
+              <select
+                className="h-9 rounded-2xl border border-white/10 bg-[rgba(15,18,30,0.9)] px-3 text-sm text-white"
+                value={profile.active_language}
+                onChange={(event) => void switchActiveLanguage(event.target.value as LanguageCode)}
+              >
+                {dashboard.supported_languages
+                  .filter((l) => profile.target_languages.includes(l.code))
+                  .map((language) => (
+                    <option key={language.code} value={language.code}>
+                      {language.name}
+                    </option>
+                  ))}
+              </select>
+            ) : null}
             <Button asChild variant="outline" className="rounded-2xl">
               <Link href="/">
                 <ArrowLeft className="mr-2 h-4 w-4" />
@@ -835,13 +1322,13 @@ export default function LanguagePage() {
           </div>
         ) : null}
 
-        <div className="grid gap-4 md:grid-cols-5">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-5">
           {[
-            ["Minutes", dashboard?.progress.minutes_practiced ?? 0],
-            ["Sessions", dashboard?.progress.sessions_count ?? 0],
+            ["Today", dashboard?.progress.today_minutes ?? 0],
+            ["Sessions", dashboard?.progress.language_sessions_count ?? 0],
             ["Words", wordVocab.length],
             ["Phrases", phraseVocab.length],
-            ["Due reviews", dashboard?.progress.due_reviews ?? 0],
+            ["Due", dashboard?.progress.due_reviews ?? 0],
           ].map(([label, value]) => (
             <div key={label} className="rounded-[1.2rem] border border-white/8 bg-[rgba(24,27,44,0.86)] p-4">
               <div className="text-xs uppercase tracking-[0.16em] text-slate-400">{label}</div>
@@ -850,11 +1337,63 @@ export default function LanguagePage() {
           ))}
         </div>
 
-        <div className="grid grid-cols-2 gap-2 rounded-[1.2rem] border border-white/8 bg-[rgba(24,27,44,0.86)] p-2 md:grid-cols-6">
+        {dashboard ? (() => {
+          const todayMin = dashboard.progress.today_minutes;
+          const goalMin = profile.daily_goal_minutes;
+          const pct = Math.min(100, goalMin > 0 ? Math.round((todayMin / goalMin) * 100) : 0);
+          const done = todayMin >= goalMin && goalMin > 0;
+          return (
+            <div className="rounded-[1.2rem] border border-white/8 bg-[rgba(24,27,44,0.86)] p-4">
+              <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
+                <span className="uppercase tracking-[0.16em]">
+                  Daily goal · {formatLanguageName(profile.active_language, dashboard.supported_languages)}
+                </span>
+                <span className={done ? "text-emerald-400" : ""}>{todayMin} / {goalMin} min{done ? " ✓" : ""}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className={`h-full rounded-full transition-all ${done ? "bg-emerald-400" : "bg-cyan-400"}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          );
+        })() : null}
+
+        <div className="space-y-3 rounded-[1.2rem] border border-white/8 bg-[rgba(24,27,44,0.86)] p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-xs uppercase tracking-[0.16em] text-slate-400">
+                Active session · {formatLanguageName(profile.active_language, dashboard?.supported_languages || [])}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                Time is tracked separately for each language while this tab is active.
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-sm font-medium text-white">
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+              {formatSessionDuration(currentSessionSeconds)}
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+            <Input
+              value={sessionNotes}
+              onChange={(event) => setSessionNotes(event.target.value)}
+              placeholder="Add a note for this session (optional)"
+            />
+            <Button className="rounded-2xl" onClick={() => void endSession()} disabled={sessionSaving || currentSessionSeconds < 30}>
+              <CheckCircle2 className="mr-2 h-4 w-4" />
+              {sessionSaving ? "Saving..." : "End session"}
+            </Button>
+          </div>
+        </div>
+
+        <div className="sticky top-0 z-20 flex gap-1 rounded-[1.2rem] border border-white/8 bg-[rgba(24,27,44,0.95)] p-2 backdrop-blur-sm">
           {[
             ["practice", "Practice", MessageCircle],
             ["conversation", "Conversation", MessageCircle],
             ["voice", "Voice", Mic],
+            ["hiragana", "Hiragana", BookOpen],
             ["words", "Words", BookOpen],
             ["phrases", "Phrases", Languages],
             ["review", "Review", CheckCircle2],
@@ -865,11 +1404,11 @@ export default function LanguagePage() {
               <Button
                 key={tabKey}
                 variant={activeTab === tabKey ? "default" : "ghost"}
-                className="rounded-xl"
+                className="flex-1 rounded-xl"
                 onClick={() => setActiveTab(tabKey)}
               >
-                <TabIcon className="mr-2 h-4 w-4" />
-                {label as string}
+                <TabIcon className="h-4 w-4 shrink-0 sm:mr-2" />
+                <span className="hidden sm:inline">{label as string}</span>
               </Button>
             );
           })}
@@ -879,11 +1418,28 @@ export default function LanguagePage() {
         <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
           <Card className="border-white/8 bg-[rgba(24,27,44,0.86)]">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Languages className="h-5 w-5" />
-                Profile
-              </CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  <Languages className="h-5 w-5" />
+                  Profile
+                </CardTitle>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1 rounded-xl"
+                  onClick={() => setProfileExpanded((c) => !c)}
+                >
+                  {profileExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  {profileExpanded ? "Hide" : "Edit"}
+                </Button>
+              </div>
+              {!profileExpanded ? (
+                <div className="mt-1 text-sm text-slate-400">
+                  {formatLanguageName(profile.active_language, dashboard?.supported_languages || [])} · {profile.level} · {profile.daily_goal_minutes} min/day
+                </div>
+              ) : null}
             </CardHeader>
+            {profileExpanded ? (
             <CardContent className="space-y-4">
               <div className="grid gap-2">
                 <label className="text-xs uppercase tracking-[0.16em] text-slate-400">Active language</label>
@@ -983,6 +1539,7 @@ export default function LanguagePage() {
                 {savingProfile ? "Saving..." : "Save profile"}
               </Button>
             </CardContent>
+            ) : null}
           </Card>
 
           <Card className="border-white/8 bg-[rgba(24,27,44,0.86)]">
@@ -1078,17 +1635,24 @@ export default function LanguagePage() {
               </div>
 
               {activePrompts.map((prompt) => (
-                <div key={prompt.id} className="rounded-[1.2rem] border border-white/8 bg-white/5 p-4">
+                <div
+                  key={prompt.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedPromptId(prompt.id)}
+                  onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedPromptId(prompt.id); }}
+                  className={`cursor-pointer rounded-[1.2rem] border p-4 transition-colors ${
+                    selectedPromptId === prompt.id
+                      ? "border-cyan-300/30 bg-cyan-300/8"
+                      : "border-white/8 bg-white/5 hover:border-white/15"
+                  }`}
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPromptId(prompt.id)}
-                      className="flex items-center gap-2 text-left"
-                    >
+                    <div className="flex items-center gap-2">
                       <Badge variant={selectedPromptId === prompt.id ? "default" : "outline"}>{prompt.mode}</Badge>
                       <span className="font-medium text-white">{prompt.title}</span>
-                    </button>
-                    <div className="flex gap-2">
+                    </div>
+                    <div className="flex gap-2" onClick={(event) => event.stopPropagation()}>
                       <Button size="sm" variant="outline" className="rounded-xl" onClick={() => void playSpeech(prompt, "slow")} disabled={Boolean(speechLoadingId)}>
                         <Play className="mr-2 h-3 w-3" />
                         {speechLoadingId === `${prompt.id}-slow` ? "Loading..." : "Slow"}
@@ -1102,6 +1666,7 @@ export default function LanguagePage() {
                   <p className="mt-3 text-sm leading-6 text-slate-300">{prompt.prompt}</p>
                   <div className="mt-3 rounded-xl bg-black/20 p-3 text-sm">
                     <div className="font-medium text-cyan-100">{prompt.target_phrase}</div>
+                    {prompt.romanization ? <div className="mt-1 text-cyan-50">{prompt.romanization}</div> : null}
                     <div className="mt-1 text-slate-400">{prompt.translation}</div>
                     <div className="mt-2 text-xs text-slate-500">{prompt.notes}</div>
                     {prompt.expected_answer ? <div className="mt-2 text-xs text-slate-400">Model answer: {prompt.expected_answer}</div> : null}
@@ -1109,27 +1674,171 @@ export default function LanguagePage() {
                 </div>
               ))}
 
-              <div className="grid gap-3 rounded-[1.2rem] border border-white/8 bg-white/5 p-4 sm:grid-cols-[8rem_1fr_auto]">
-                <Input
-                  type="number"
-                  min={0}
-                  max={240}
-                  value={sessionMinutes}
-                  onChange={(event) => setSessionMinutes(event.target.value)}
-                  aria-label="Practice minutes"
-                />
-                <Input
-                  value={sessionNotes}
-                  onChange={(event) => setSessionNotes(event.target.value)}
-                  placeholder="Practice notes"
-                />
-                <Button className="rounded-2xl" onClick={() => void logSession("daily")} disabled={sessionSaving}>
-                  <CheckCircle2 className="mr-2 h-4 w-4" />
-                  Log
-                </Button>
+            </CardContent>
+          </Card>
+        </div>
+        ) : null}
+
+        {activeTab === "hiragana" ? (
+        <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
+          <Card className="border-white/8 bg-[rgba(24,27,44,0.86)]">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <BookOpen className="h-5 w-5" />
+                Hiragana Rows
+              </CardTitle>
+              <div className="text-sm text-slate-300">
+                Learn the gojuon grid by row pairs, then fold each new row into review.
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {profile.active_language !== "japanese" ? (
+                <div className="rounded-[1.2rem] border border-amber-300/20 bg-amber-300/10 p-4">
+                  <div className="text-sm font-medium text-white">Switch to Japanese for this track</div>
+                  <div className="mt-1 text-sm text-slate-300">
+                    Hiragana study belongs with your Japanese practice history and session timer.
+                  </div>
+                  <Button className="mt-3 rounded-2xl" onClick={() => void switchActiveLanguage("japanese")}>
+                    Use Japanese
+                  </Button>
+                </div>
+              ) : null}
+
+              <div className="grid gap-2">
+                {HIRAGANA_WEEKS.map((week, index) => (
+                  <button
+                    key={week.week}
+                    type="button"
+                    className={`rounded-[1.1rem] border p-3 text-left transition-colors ${
+                      hiraganaWeekIndex === index
+                        ? "border-cyan-300/30 bg-cyan-300/10"
+                        : "border-white/8 bg-white/5 hover:border-white/15"
+                    }`}
+                    onClick={() => setHiraganaWeekIndex(index)}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Week {week.week}</div>
+                        <div className="mt-1 font-medium text-white">{week.title}</div>
+                      </div>
+                      <Badge variant={hiraganaWeekIndex === index ? "default" : "outline"}>
+                        {week.rows.reduce((total, row) => total + row.characters.length, 0)} kana
+                      </Badge>
+                    </div>
+                  </button>
+                ))}
               </div>
             </CardContent>
           </Card>
+
+          <div className="space-y-6">
+            <Card className="border-white/8 bg-[rgba(24,27,44,0.86)]">
+              <CardHeader>
+                <CardTitle>Week {currentHiraganaWeek.week}: {currentHiraganaWeek.title}</CardTitle>
+                <div className="text-sm text-slate-300">{currentHiraganaWeek.drill}</div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {currentHiraganaWeek.rows.map((row) => (
+                  <div key={row.label} className="rounded-[1.2rem] border border-white/8 bg-white/5 p-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-medium text-white">{row.label}</div>
+                        <div className="text-xs text-slate-400">{row.sounds}</div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+                      {row.characters.map((character) => (
+                        <div key={`${row.label}-${character.kana}`} className="aspect-square rounded-xl border border-white/8 bg-black/20 p-2 text-center">
+                          <div className="flex h-full flex-col items-center justify-center">
+                            <div className="text-4xl font-semibold text-white">{character.kana}</div>
+                            <div className="mt-2 text-sm text-cyan-100">{character.romaji}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            <Card className="border-white/8 bg-[rgba(24,27,44,0.86)]">
+              <CardHeader>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <CheckCircle2 className="h-5 w-5" />
+                      Row Drill
+                    </CardTitle>
+                    <div className="mt-1 text-sm text-slate-300">
+                      {hiraganaPracticeDeck.length ? `${hiraganaPracticeIndex + 1} of ${hiraganaPracticeDeck.length}` : "No kana selected"}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant={hiraganaRandomized ? "default" : "outline"}
+                      className="rounded-2xl"
+                      onClick={() => {
+                        setHiraganaRandomized((current) => !current);
+                        setHiraganaShuffleSeed((current) => current + 1);
+                      }}
+                    >
+                      Randomize
+                    </Button>
+                    {hiraganaRandomized ? (
+                      <Button
+                        variant="outline"
+                        className="rounded-2xl"
+                        onClick={() => setHiraganaShuffleSeed((current) => current + 1)}
+                      >
+                        Reshuffle
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {currentHiraganaCard ? (
+                  <>
+                    <div className="rounded-[1.2rem] border border-cyan-300/15 bg-cyan-300/8 p-6 text-center">
+                      <div className="text-7xl font-semibold text-white">{currentHiraganaCard.kana}</div>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+                      <Input
+                        value={hiraganaAnswer}
+                        onChange={(event) => {
+                          setHiraganaAnswer(event.target.value);
+                          setHiraganaChecked(false);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            setHiraganaChecked(true);
+                          }
+                        }}
+                        placeholder="Type romaji"
+                      />
+                      <Button variant="outline" className="rounded-2xl" onClick={() => setHiraganaChecked(true)}>
+                        Check
+                      </Button>
+                      <Button className="rounded-2xl" onClick={advanceHiraganaPractice}>
+                        Next
+                      </Button>
+                    </div>
+                    {hiraganaChecked ? (
+                      <div className={`rounded-xl border p-3 text-sm ${
+                        hiraganaAnswerCorrect
+                          ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
+                          : "border-amber-300/25 bg-amber-300/10 text-amber-100"
+                      }`}>
+                        {hiraganaAnswerCorrect
+                          ? "Correct."
+                          : `Answer: ${currentHiraganaCard.romaji}`}
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
+              </CardContent>
+            </Card>
+          </div>
         </div>
         ) : null}
 
@@ -1165,23 +1874,34 @@ export default function LanguagePage() {
               </div>
               <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-4">
                 <div className="text-sm font-medium text-white">{selectedPrompt?.target_phrase || selectedPrompt?.title || "Choose a prompt"}</div>
+                {selectedPrompt?.romanization ? <div className="mt-1 text-sm text-cyan-100">{selectedPrompt.romanization}</div> : null}
+                {selectedPrompt?.translation ? <div className="mt-1 text-sm text-slate-400">{selectedPrompt.translation}</div> : null}
                 <div className="mt-2 text-sm leading-6 text-slate-300">{selectedPrompt?.prompt}</div>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <Button variant="outline" className="rounded-2xl" onClick={() => selectedPrompt && void playSpeech(selectedPrompt, "slow")} disabled={!selectedPrompt || Boolean(speechLoadingId)}>
                   <Play className="mr-2 h-4 w-4" />
-                  Slow audio
+                  Slow
                 </Button>
                 <Button variant="outline" className="rounded-2xl" onClick={() => selectedPrompt && void playSpeech(selectedPrompt, "normal")} disabled={!selectedPrompt || Boolean(speechLoadingId)}>
                   <Play className="mr-2 h-4 w-4" />
-                  Natural audio
+                  Natural
                 </Button>
                 <Button className="rounded-2xl" onClick={() => recording ? stopRecording() : void startRecording()} disabled={!selectedPrompt}>
-                  {recording ? <Square className="mr-2 h-4 w-4" /> : <Mic className="mr-2 h-4 w-4" />}
-                  {recording ? "Stop recording" : "Record"}
+                  {recording ? (
+                    <>
+                      <span className="mr-2 inline-block h-2 w-2 animate-pulse rounded-full bg-red-400" />
+                      Stop
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="mr-2 h-4 w-4" />
+                      Record
+                    </>
+                  )}
                 </Button>
                 <Button variant="outline" className="rounded-2xl" onClick={() => void requestPronunciationFeedback()} disabled={!recordedChunks.length || feedbackLoading}>
-                  {feedbackLoading ? "Checking..." : "Check pronunciation"}
+                  {feedbackLoading ? "Checking..." : "Check"}
                 </Button>
               </div>
               <div className="space-y-3">
@@ -1266,7 +1986,7 @@ export default function LanguagePage() {
                 Clear chat
               </Button>
             </div>
-            <div className="max-h-[28rem] space-y-3 overflow-auto rounded-[1.2rem] border border-white/8 bg-black/20 p-4">
+            <div className="max-h-[50vh] min-h-48 space-y-3 overflow-auto rounded-[1.2rem] border border-white/8 bg-black/20 p-4">
               {conversationMessages.length ? (
                 conversationMessages.map((message, index) => (
                   <div
@@ -1279,32 +1999,71 @@ export default function LanguagePage() {
                       {message.role === "user" ? "You" : "Jarvis"}
                     </div>
                     <div className="mt-1 text-sm leading-6 text-white">{message.content}</div>
+                    {message.romanization ? <div className="mt-2 text-sm text-cyan-100">{message.romanization}</div> : null}
                     {message.translation ? <div className="mt-2 text-sm text-slate-400">{message.translation}</div> : null}
                     {message.correction ? <div className="mt-2 text-sm text-cyan-100">{message.correction}</div> : null}
                     {message.role === "assistant" ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="mt-3 rounded-xl"
-                        onClick={() =>
-                          void playSpeech(
-                            {
-                              id: `conversation-${index}`,
-                              mode: "conversation",
-                              title: "Conversation reply",
-                              prompt: message.content,
-                              target_phrase: message.content,
-                              translation: message.translation || "",
-                              notes: "",
-                              expected_answer: "",
-                            },
-                            "normal"
-                          )
-                        }
-                      >
-                        <Play className="mr-2 h-3 w-3" />
-                        Play reply
-                      </Button>
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="mt-3 rounded-xl"
+                          onClick={() =>
+                            void playSpeech(
+                              {
+                                id: `conversation-${index}`,
+                                mode: "conversation",
+                                title: "Conversation reply",
+                                prompt: message.content,
+                                target_phrase: message.content,
+                                romanization: message.romanization || "",
+                                translation: message.translation || "",
+                                notes: "",
+                                expected_answer: "",
+                              },
+                              "normal"
+                            )
+                          }
+                        >
+                          <Play className="mr-2 h-3 w-3" />
+                          Play reply
+                        </Button>
+                        {message.vocab?.length ? (
+                          <div className="mt-3 space-y-1.5">
+                            <div className="text-xs uppercase tracking-[0.14em] text-slate-500">New words</div>
+                            {message.vocab.map((word) => (
+                              <div key={word.phrase} className="flex items-center justify-between gap-2 rounded-xl bg-white/5 px-3 py-2 text-sm">
+                                <div className="min-w-0">
+                                  <span className="font-medium text-white">{word.phrase}</span>
+                                  {word.translation ? <span className="ml-2 text-slate-400">{word.translation}</span> : null}
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="shrink-0 rounded-xl"
+                                  disabled={savingConvVocab === word.phrase}
+                                  onClick={() => void saveConversationVocab(word)}
+                                >
+                                  {savingConvVocab === word.phrase ? "Saving…" : "Save"}
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                        {message.suggestedReply ? (
+                          <button
+                            type="button"
+                            className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left text-sm text-slate-300 hover:bg-white/8"
+                            onClick={() => setConversationInput(message.suggestedReply!)}
+                          >
+                            <span className="mr-2 text-xs text-slate-500">Try:</span>
+                            {message.suggestedReply}
+                            {message.suggestedReplyRomanization ? (
+                              <span className="mt-1 block text-cyan-100">{message.suggestedReplyRomanization}</span>
+                            ) : null}
+                          </button>
+                        ) : null}
+                      </>
                     ) : null}
                   </div>
                 ))
@@ -1315,7 +2074,8 @@ export default function LanguagePage() {
               )}
             </div>
             <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-              <Input
+              <textarea
+                className="min-h-[2.75rem] max-h-36 w-full resize-none rounded-xl border border-white/10 bg-[rgba(15,18,30,0.9)] px-3 py-2.5 text-sm text-white outline-none placeholder:text-slate-500"
                 value={conversationInput}
                 onChange={(event) => setConversationInput(event.target.value)}
                 onKeyDown={(event) => {
@@ -1324,9 +2084,10 @@ export default function LanguagePage() {
                     void sendConversationMessage();
                   }
                 }}
-                placeholder="Type your message in the target language"
+                placeholder="Type your message — Shift+Enter for new line"
+                rows={2}
               />
-              <Button className="rounded-2xl" onClick={() => void sendConversationMessage()} disabled={conversationLoading || !conversationInput.trim()}>
+              <Button className="self-end rounded-2xl" onClick={() => void sendConversationMessage()} disabled={conversationLoading || !conversationInput.trim()}>
                 {conversationLoading ? "Thinking..." : "Send"}
               </Button>
             </div>
@@ -1375,7 +2136,7 @@ export default function LanguagePage() {
                   <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                     <div>
                       <div className="text-xs uppercase tracking-[0.16em] text-slate-500">
-                        {formatLanguageName(currentPracticeWord.language, dashboard?.supported_languages || [])} · {wordPracticeIndex + 1} of {wordPracticeDeck.length}
+                        {formatLanguageName(currentPracticeWord.language, dashboard?.supported_languages || [])} · {wordPracticeIndex + 1} of {shuffledWordPracticeDeck.length}
                       </div>
                       <div className="mt-4 text-3xl font-semibold text-white">
                         {wordPracticeMode === "english-to-target"
@@ -1455,9 +2216,9 @@ export default function LanguagePage() {
                   Add a few words below, then use this space for flashcards and blind translation.
                 </div>
               )}
-              {wordVocab.length > wordPracticeDeck.length ? (
+              {wordVocab.length > shuffledWordPracticeDeck.length ? (
                 <div className="text-xs text-slate-500">
-                  Practice deck uses {wordPracticeDeck.length} unique words from {wordVocab.length} saved word entries.
+                  Practice deck uses {shuffledWordPracticeDeck.length} unique words from {wordVocab.length} saved word entries.
                 </div>
               ) : null}
             </CardContent>
@@ -1483,8 +2244,19 @@ export default function LanguagePage() {
                 <Input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Notes" />
                 <Button className="rounded-2xl" onClick={() => void addVocab()} disabled={vocabSaving || !phrase.trim()}>
                   <Plus className="mr-2 h-4 w-4" />
-                  {vocabSaving ? "Saving..." : activeVocabKind === "word" ? "Save word" : "Save phrase"}
+                  {vocabSaving ? (activeVocabKind === "word" ? "Normalizing..." : "Saving...") : activeVocabKind === "word" ? "Save word" : "Save phrase"}
                 </Button>
+                {activeVocabKind === "word" && unenrichedWordCount > 0 ? (
+                  <Button
+                    variant="outline"
+                    className="rounded-2xl"
+                    onClick={() => void normalizeExistingWords()}
+                    disabled={vocabNormalizing}
+                  >
+                    <Wand2 className="mr-2 h-4 w-4" />
+                    {vocabNormalizing ? "Normalizing..." : `Normalize ${unenrichedWordCount} existing`}
+                  </Button>
+                ) : null}
               </div>
 
               <div className="flex flex-col gap-3 rounded-[1.2rem] border border-white/8 bg-white/5 p-4 md:flex-row md:items-center md:justify-between">
@@ -1503,41 +2275,91 @@ export default function LanguagePage() {
               <div className="space-y-3">
                 {visibleVocabItems.map((item) => (
                   <div key={item.id} className="rounded-[1.2rem] border border-white/8 bg-white/5 p-4">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
-                        <div className="text-sm text-slate-400">{formatLanguageName(item.language, dashboard?.supported_languages || [])}</div>
-                        <div className="mt-1 font-medium text-white">{item.phrase}</div>
-                        <div className="mt-1 text-sm text-slate-300">{item.translation}</div>
-                        {item.notes ? (
-                          <div className="mt-1 text-sm text-cyan-100">{item.notes}</div>
-                        ) : null}
-                        {item.tags.filter(isVisibleVocabTag).length ? (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {item.tags.filter(isVisibleVocabTag).map((tag) => (
-                              <Badge key={tag} variant="outline">{tag}</Badge>
-                            ))}
+                    {editingVocabId === item.id ? (
+                      <div className="space-y-3">
+                        <Input value={editPhrase} onChange={(e) => setEditPhrase(e.target.value)} placeholder="Word / phrase" />
+                        <Input value={editTranslation} onChange={(e) => setEditTranslation(e.target.value)} placeholder="Translation" />
+                        <Input value={editNotes} onChange={(e) => setEditNotes(e.target.value)} placeholder="Notes" />
+                        <div className="flex gap-2">
+                          <Button size="sm" className="rounded-xl" onClick={() => void updateVocab(item.id)} disabled={vocabUpdating || !editPhrase.trim()}>
+                            {vocabUpdating ? "Saving…" : "Save"}
+                          </Button>
+                          <Button size="sm" variant="outline" className="rounded-xl" onClick={() => setEditingVocabId(null)}>
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <div className="text-sm text-slate-400">{formatLanguageName(item.language, dashboard?.supported_languages || [])}</div>
+                            <div className="mt-1 font-medium text-white">{item.phrase}</div>
+                            <div className="mt-1 text-sm text-slate-300">{item.translation}</div>
+                            {item.notes ? <div className="mt-1 text-sm text-cyan-100">{item.notes}</div> : null}
+                            {item.tags.filter(isVisibleVocabTag).length ? (
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {item.tags.filter(isVisibleVocabTag).map((tag) => (
+                                  <Badge key={tag} variant="outline">{tag}</Badge>
+                                ))}
+                              </div>
+                            ) : null}
                           </div>
-                        ) : null}
-                      </div>
-                      <div className="flex gap-2">
-                        <Button size="sm" variant="outline" className="rounded-xl" onClick={() => void reviewVocab(item.id, false)}>
-                          Again
-                        </Button>
-                        <Button size="sm" className="rounded-xl" onClick={() => void reviewVocab(item.id, true)}>
-                          Know it
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="rounded-xl"
-                          onClick={() => void explainWord(item)}
-                          disabled={wordExplanationLoadingId === item.id}
-                        >
-                          {wordExplanationLoadingId === item.id ? "Loading..." : "Examples"}
-                        </Button>
-                      </div>
-                    </div>
-                    {renderWordExplanation(item)}
+                          <div className="flex flex-wrap gap-2">
+                            <Button size="sm" variant="outline" className="rounded-xl" onClick={() => void reviewVocab(item.id, false)}>
+                              Again
+                            </Button>
+                            <Button size="sm" className="rounded-xl" onClick={() => void reviewVocab(item.id, true)}>
+                              Know it
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="rounded-xl"
+                              onClick={() => void explainWord(item)}
+                              disabled={wordExplanationLoadingId === item.id}
+                            >
+                              {wordExplanationLoadingId === item.id ? "Loading..." : "Examples"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="rounded-xl"
+                              onClick={() => {
+                                setEditingVocabId(item.id);
+                                setEditPhrase(item.phrase);
+                                setEditTranslation(item.translation);
+                                setEditNotes(item.notes);
+                                setConfirmDeleteId(null);
+                              }}
+                            >
+                              Edit
+                            </Button>
+                            {confirmDeleteId === item.id ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="rounded-xl border-rose-400/40 text-rose-300 hover:bg-rose-500/10"
+                                disabled={vocabDeleting === item.id}
+                                onClick={() => void deleteVocab(item.id)}
+                              >
+                                {vocabDeleting === item.id ? "Deleting…" : "Confirm?"}
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="rounded-xl text-slate-400"
+                                onClick={() => setConfirmDeleteId(item.id)}
+                              >
+                                Delete
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                        {renderWordExplanation(item)}
+                      </>
+                    )}
                   </div>
                 ))}
                 {visibleVocabCount < filteredVocabItems.length ? (
@@ -1575,12 +2397,72 @@ export default function LanguagePage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-4">
-                <div className="text-sm font-medium text-white">Due now</div>
-                <div className="mt-2 text-3xl font-semibold text-white">{dueVocab.length}</div>
-                <div className="mt-1 text-sm text-slate-400">A remembered item moves farther into the future; missed items come back tomorrow.</div>
-              </div>
+              {dueVocab.length > 0 ? (() => {
+                const currentDue = dueVocab[Math.min(reviewIndex, dueVocab.length - 1)];
+                const doneAll = reviewIndex >= dueVocab.length;
+                return (
+                  <div className="rounded-[1.2rem] border border-cyan-300/15 bg-cyan-300/8 p-4">
+                    {doneAll ? (
+                      <div className="py-4 text-center">
+                        <div className="text-lg font-semibold text-white">All caught up!</div>
+                        <div className="mt-1 text-sm text-slate-400">No more items due right now.</div>
+                        <Button variant="outline" className="mt-4 rounded-2xl" onClick={() => setReviewIndex(0)}>
+                          Review again
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs uppercase tracking-[0.16em] text-cyan-100">Due now</div>
+                          <div className="text-xs text-slate-500">{reviewIndex + 1} of {dueVocab.length}</div>
+                        </div>
+                        <div className="mt-4 text-3xl font-semibold text-white">{currentDue.phrase}</div>
+                        {currentDue.notes ? <div className="mt-2 text-sm text-cyan-100">{currentDue.notes}</div> : null}
+                        <div className="mt-4 min-h-8 text-lg text-slate-200">
+                          {reviewRevealed ? currentDue.translation || "No translation saved" : "Think of the answer, then reveal."}
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <Button variant="outline" className="rounded-2xl" onClick={() => setReviewRevealed((c) => !c)}>
+                            {reviewRevealed ? "Hide" : "Reveal"}
+                          </Button>
+                        </div>
+                        {reviewRevealed ? (
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            <Button
+                              variant="outline"
+                              className="rounded-2xl"
+                              onClick={async () => {
+                                await reviewVocab(currentDue.id, false);
+                                setReviewIndex((i) => i + 1);
+                                setReviewRevealed(false);
+                              }}
+                            >
+                              Again
+                            </Button>
+                            <Button
+                              className="rounded-2xl"
+                              onClick={async () => {
+                                await reviewVocab(currentDue.id, true);
+                                setReviewIndex((i) => i + 1);
+                                setReviewRevealed(false);
+                              }}
+                            >
+                              Know it
+                            </Button>
+                          </div>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                );
+              })() : (
+                <div className="rounded-[1.2rem] border border-white/8 bg-white/5 p-4">
+                  <div className="text-sm font-medium text-white">No items due</div>
+                  <div className="mt-1 text-sm text-slate-400">All words are scheduled for the future. Check back later or add new words to review.</div>
+                </div>
+              )}
               <div className="space-y-3">
+                <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Recent sessions</div>
                 {(dashboard?.recent_sessions || []).map((session) => (
                   <div key={session.id} className="rounded-[1.2rem] border border-white/8 bg-white/5 p-4">
                     <div className="flex items-start justify-between gap-3">
