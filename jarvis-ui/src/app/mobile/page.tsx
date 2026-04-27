@@ -191,6 +191,12 @@ type TaskListResponse = {
   tasks: DashboardTaskItem[];
 };
 
+type JournalLanguageSession = {
+  id: string;
+  language: string;
+  minutes: number;
+};
+
 type JournalDayEntry = {
   date: string;
   date_label: string;
@@ -200,6 +206,7 @@ type JournalDayEntry = {
   journal_entry: string;
   accomplishments: string;
   gratitude_entry: string;
+  language_sessions: JournalLanguageSession[];
   updated_at?: string | null;
 };
 
@@ -2198,23 +2205,39 @@ function MobilePageContent() {
               </CardContent>
             </Card>
 
-            {journal.map((entry) => (
-              <Card key={entry.date} className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
-                <CardHeader className="pb-2">
-                  <Link href={`/mobile/journal/${entry.date}`} className="flex w-full items-start justify-between gap-3 text-left">
-                    <div className="min-w-0">
-                      <CardTitle className="text-base">
-                        {highlightJournalSearchText(entry.date_label, journalQuery)}
-                      </CardTitle>
-                      <p className="mt-2 text-sm leading-6 text-slate-300">
-                        {highlightJournalSearchText(summarizeJournal(entry), journalQuery)}
-                      </p>
-                    </div>
-                    <ChevronRight className="mt-1 h-4 w-4 text-slate-400" />
-                  </Link>
-                </CardHeader>
-              </Card>
-            ))}
+            {journal.map((entry) => {
+              const langTotals = (entry.language_sessions || []).reduce<Record<string, number>>((acc, s) => {
+                acc[s.language] = (acc[s.language] || 0) + s.minutes;
+                return acc;
+              }, {});
+              const langEntries = Object.entries(langTotals);
+              return (
+                <Card key={entry.date} className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
+                  <CardHeader className="pb-2">
+                    <Link href={`/mobile/journal/${entry.date}`} className="flex w-full items-start justify-between gap-3 text-left">
+                      <div className="min-w-0">
+                        <CardTitle className="text-base">
+                          {highlightJournalSearchText(entry.date_label, journalQuery)}
+                        </CardTitle>
+                        <p className="mt-2 text-sm leading-6 text-slate-300">
+                          {highlightJournalSearchText(summarizeJournal(entry), journalQuery)}
+                        </p>
+                        {langEntries.length ? (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {langEntries.map(([lang, mins]) => (
+                              <span key={lang} className="inline-flex items-center rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2 py-0.5 text-xs capitalize text-cyan-100">
+                                {lang} · {mins}m
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                      <ChevronRight className="mt-1 h-4 w-4 text-slate-400" />
+                    </Link>
+                  </CardHeader>
+                </Card>
+              );
+            })}
             {!journal.length && !loading ? (
               <Card className="rounded-[1.8rem] border border-white/8 bg-[rgba(17,19,34,0.82)]">
                 <CardContent className="p-4 text-sm text-slate-400">
