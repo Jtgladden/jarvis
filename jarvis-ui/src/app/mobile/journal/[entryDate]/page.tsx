@@ -18,6 +18,15 @@ type CalendarAgendaItem = {
   removed?: boolean;
 };
 
+type LanguagePracticeSession = {
+  id: string;
+  language: string;
+  mode: string;
+  minutes: number;
+  notes: string;
+  created_at?: string | null;
+};
+
 type JournalDayEntry = {
   date: string;
   date_label: string;
@@ -43,6 +52,7 @@ type JournalDayEntry = {
   }>;
   photo_data_url?: string | null;
   calendar_items: CalendarAgendaItem[];
+  language_sessions: LanguagePracticeSession[];
   updated_at?: string | null;
 };
 
@@ -508,6 +518,28 @@ export default function MobileJournalDetailPage({
                 ) : null
               )
             )}
+
+            {entry?.language_sessions?.length ? (
+              <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Language practice</div>
+                <div className="mt-2 space-y-2">
+                  {Object.entries(
+                    entry.language_sessions.reduce<Record<string, { minutes: number; sessions: number }>>((acc, s) => {
+                      const key = s.language;
+                      if (!acc[key]) acc[key] = { minutes: 0, sessions: 0 };
+                      acc[key].minutes += s.minutes;
+                      acc[key].sessions += 1;
+                      return acc;
+                    }, {})
+                  ).map(([language, stats]) => (
+                    <div key={language} className="flex items-center justify-between text-sm">
+                      <span className="capitalize text-slate-200">{language}</span>
+                      <span className="text-slate-400">{stats.minutes} min · {stats.sessions} {stats.sessions === 1 ? "session" : "sessions"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {entry?.study_links?.length ? (
               <div className="rounded-[1.2rem] border border-white/8 bg-white/5 px-4 py-3">

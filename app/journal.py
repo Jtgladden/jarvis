@@ -25,7 +25,8 @@ from app.journal_store import (
     upsert_journal_entry,
     upsert_journal_news,
 )
-from app.schemas import CalendarAgendaItem, JournalDayEntry, JournalNewsArticle, JournalResponse, JournalStudyLink
+from app.language_store import list_sessions_for_date_range
+from app.schemas import CalendarAgendaItem, JournalDayEntry, JournalNewsArticle, JournalResponse, JournalStudyLink, LanguagePracticeSession
 from app.user_context import get_default_user_context
 
 logger = logging.getLogger(__name__)
@@ -1614,6 +1615,26 @@ def _build_journal_entries(
 
     oldest_day = date.fromisoformat(day_keys[-1])
     newest_day = date.fromisoformat(day_keys[0])
+
+    end_date = (newest_day + timedelta(days=1)).isoformat()
+    raw_sessions = list_sessions_for_date_range(
+        start_date=oldest_day.isoformat(),
+        end_date=end_date,
+        user_id=user_id,
+    )
+    sessions_by_day: dict[str, list[LanguagePracticeSession]] = {}
+    for row in raw_sessions:
+        day_key = (row["created_at"] or "")[:10]
+        sessions_by_day.setdefault(day_key, []).append(
+            LanguagePracticeSession(
+                id=row["session_id"],
+                language=row["language"],
+                mode=row["mode"],
+                minutes=row["minutes"],
+                notes=row["notes"] or "",
+                created_at=row["created_at"],
+            )
+        )
     agenda = list_events_between(
         datetime.combine(oldest_day, time.min, tzinfo=LOCAL_TIMEZONE),
         datetime.combine(newest_day + timedelta(days=1), time.min, tzinfo=LOCAL_TIMEZONE),
@@ -1716,6 +1737,7 @@ def _build_journal_entries(
                 study_links=_parse_study_links(saved.get("study_links_json")),
                 photo_data_url=saved.get("photo_data_url"),
                 calendar_items=entry["calendar_items_full"],
+                language_sessions=sessions_by_day.get(entry["date"], []),
                 updated_at=saved.get("updated_at"),
             )
         )

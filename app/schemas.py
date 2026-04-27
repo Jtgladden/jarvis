@@ -435,6 +435,7 @@ class JournalDayEntry(BaseModel):
     study_links: List[JournalStudyLink] = Field(default_factory=list)
     photo_data_url: Optional[str] = None
     calendar_items: List[CalendarAgendaItem] = Field(default_factory=list)
+    language_sessions: List["LanguagePracticeSession"] = Field(default_factory=list)
     updated_at: Optional[str] = None
 
 
@@ -722,6 +723,7 @@ class LanguageVocabItem(BaseModel):
     language: LanguageCode
     phrase: str
     translation: str = ""
+    pronunciation: str = ""
     notes: str = ""
     tags: List[str] = Field(default_factory=list)
     review_count: int = 0
@@ -735,6 +737,7 @@ class LanguageVocabCreateRequest(BaseModel):
     language: LanguageCode
     phrase: str
     translation: str = ""
+    pronunciation: str = ""
     notes: str = ""
     tags: List[str] = Field(default_factory=list)
 
@@ -746,6 +749,7 @@ class LanguageVocabReviewRequest(BaseModel):
 class LanguageVocabUpdateRequest(BaseModel):
     phrase: str = ""
     translation: str = ""
+    pronunciation: str = ""
     notes: str = ""
     tags: List[str] = Field(default_factory=list)
 
@@ -894,3 +898,6 @@ class LanguageWordExplainResponse(BaseModel):
     examples: List[LanguageWordExample] = Field(default_factory=list)
     common_mistakes: List[str] = Field(default_factory=list)
     quick_drill: str = ""
+
+
+JournalDayEntry.model_rebuild()

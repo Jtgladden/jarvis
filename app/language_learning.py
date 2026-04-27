@@ -4,11 +4,13 @@ from datetime import datetime
 from hashlib import sha1
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import UploadFile
 from openai import OpenAI
 
 from app.config import (
+    DEFAULT_TIMEZONE,
     OPENAI_API_KEY,
     OPENAI_LANGUAGE_MAX_TOKENS,
     OPENAI_LANGUAGE_MODEL,
@@ -16,6 +18,7 @@ from app.config import (
     OPENAI_TTS_MODEL,
     OPENAI_TTS_VOICE,
 )
+from app.journal_store import list_journal_entries, upsert_journal_entry
 from app.schemas import (
     LanguageCode,
     LanguageConversationRequest,
@@ -199,6 +202,7 @@ def _vocab_from_record(row) -> LanguageVocabItem:
         language=row["language"],
         phrase=row["phrase"],
         translation=row["translation"],
+        pronunciation=row["pronunciation"] or "",
         notes=row["notes"],
         tags=tags,
         review_count=row["review_count"],
@@ -371,6 +375,7 @@ def update_language_vocab(vocab_id: str, payload: LanguageVocabUpdateRequest) ->
         vocab_id=vocab_id,
         phrase=phrase,
         translation=payload.translation.strip(),
+        pronunciation=payload.pronunciation.strip(),
         notes=payload.notes.strip(),
         tags=[tag.strip() for tag in payload.tags if tag.strip()],
         user_id=user_id,
@@ -408,7 +413,8 @@ def _normalize_vocab_with_ai(payload: LanguageVocabCreateRequest) -> dict[str, A
                 "and useful for conversation; do not reduce it to a single dictionary word. "
                 "For Japanese, if the learner enters romaji, convert the headword or phrase to the most natural "
                 "Japanese writing for the card, preferring kana for beginner words unless kanji is essential. "
-                "Always include romaji in notes for Japanese. For Spanish, preserve accents and punctuation. "
+                "Always put romaji in the pronunciation field for Japanese — not in notes. "
+                "For Spanish, preserve accents and punctuation. "
                 "For Tagalog and Hiligaynon, normalize spelling and keep learner-friendly notes. "
                 "If the input is ambiguous, choose the most common beginner meaning and mention ambiguity in notes."
             ),
@@ -422,7 +428,8 @@ def _normalize_vocab_with_ai(payload: LanguageVocabCreateRequest) -> dict[str, A
                 "schema": {
                     "phrase": "normalized word or phrase in the target language",
                     "translation": "short English gloss",
-                    "notes": "short learner note; include Japanese romaji as 'Romaji: ...'",
+                    "pronunciation": "reading aid — romaji for Japanese, empty string for Latin-script languages",
+                    "notes": "short learner note about meaning, usage, or nuance; do not repeat the pronunciation here",
                     "tags": [card_kind, "part-of-speech, phrase type, or helpful category"],
                 },
             },
@@ -432,6 +439,7 @@ def _normalize_vocab_with_ai(payload: LanguageVocabCreateRequest) -> dict[str, A
         return {
             "phrase": payload.phrase.strip(),
             "translation": payload.translation.strip(),
+            "pronunciation": payload.pronunciation.strip(),
             "notes": payload.notes.strip(),
             "tags": tags,
         }
@@ -444,6 +452,7 @@ def _normalize_vocab_with_ai(payload: LanguageVocabCreateRequest) -> dict[str, A
 
     phrase = str(result.get("phrase") or payload.phrase).strip()
     translation = str(result.get("translation") or payload.translation).strip()
+    pronunciation = str(result.get("pronunciation") or payload.pronunciation or "").strip()
     notes = str(result.get("notes") or payload.notes).strip()
     if payload.notes.strip() and payload.notes.strip() not in notes:
         notes = f"{notes}\nUser note: {payload.notes.strip()}" if notes else payload.notes.strip()
@@ -451,6 +460,7 @@ def _normalize_vocab_with_ai(payload: LanguageVocabCreateRequest) -> dict[str, A
     return {
         "phrase": phrase,
         "translation": translation,
+        "pronunciation": pronunciation,
         "notes": notes,
         "tags": normalized_tags,
     }
@@ -466,6 +476,7 @@ def create_language_vocab(payload: LanguageVocabCreateRequest) -> LanguageVocabI
         language=payload.language,
         phrase=normalized["phrase"],
         translation=normalized["translation"],
+        pronunciation=normalized["pronunciation"],
         notes=normalized["notes"],
         tags=normalized["tags"],
         user_id=user_id,
@@ -493,6 +504,7 @@ def normalize_existing_language_vocab(max_items: int = 30) -> LanguageVocabNorma
                 language=item.language,
                 phrase=item.phrase,
                 translation=item.translation,
+                pronunciation=item.pronunciation,
                 notes=item.notes,
                 tags=item.tags,
             )
@@ -500,6 +512,7 @@ def normalize_existing_language_vocab(max_items: int = 30) -> LanguageVocabNorma
         changed = (
             normalized["phrase"] != item.phrase
             or normalized["translation"] != item.translation
+            or normalized["pronunciation"] != item.pronunciation
             or normalized["notes"] != item.notes
             or normalized["tags"] != item.tags
         )
@@ -510,6 +523,7 @@ def normalize_existing_language_vocab(max_items: int = 30) -> LanguageVocabNorma
             vocab_id=item.id,
             phrase=normalized["phrase"],
             translation=normalized["translation"],
+            pronunciation=normalized["pronunciation"],
             notes=normalized["notes"],
             tags=normalized["tags"],
             user_id=user_id,
@@ -534,14 +548,45 @@ def review_language_vocab(vocab_id: str, remembered: bool) -> LanguageVocabItem:
 
 
 def create_language_session(payload: LanguagePracticeSessionCreateRequest) -> LanguagePracticeSession:
+    user_id = get_default_user_context().user_id
     row = save_session_record(
         language=payload.language,
         mode=payload.mode,
         minutes=payload.minutes,
         notes=payload.notes.strip(),
-        user_id=get_default_user_context().user_id,
+        user_id=user_id,
     )
-    return _session_from_record(row)
+    session = _session_from_record(row)
+
+    try:
+        tz = ZoneInfo(DEFAULT_TIMEZONE)
+        local_time = datetime.now(tz).strftime("%H:%M")
+        entry_date = datetime.now(tz).date().isoformat()
+        note_text = session.notes.strip()
+        line = f"{local_time} · Language practice · {payload.language} · {payload.mode} · {session.minutes}m"
+        if note_text:
+            line = f"{line} · {note_text}"
+
+        existing = list_journal_entries(user_id=user_id).get(entry_date, {})
+        existing_entry = str(existing.get("journal_entry") or "").rstrip()
+        updated_entry = f"{existing_entry}\n{line}".strip() if existing_entry else line
+
+        upsert_journal_entry(
+            entry_date=entry_date,
+            journal_entry=updated_entry,
+            accomplishments=str(existing.get("accomplishments") or ""),
+            gratitude_entry=str(existing.get("gratitude_entry") or ""),
+            scripture_study=str(existing.get("scripture_study") or ""),
+            spiritual_notes=str(existing.get("spiritual_notes") or ""),
+            study_links_json=str(existing.get("study_links_json") or "[]"),
+            photo_data_url=existing.get("photo_data_url"),
+            calendar_items_json=str(existing.get("calendar_items_json") or "[]"),
+            user_id=user_id,
+        )
+    except Exception as exc:
+        logger.warning("Unable to append language session to journal: %s", exc)
+
+    return session
 
 
 def generate_language_practice(payload: LanguagePracticeGenerateRequest) -> LanguagePracticeGenerateResponse:

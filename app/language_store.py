@@ -81,6 +81,7 @@ def init_language_store() -> None:
                 language TEXT NOT NULL,
                 phrase TEXT NOT NULL,
                 translation TEXT NOT NULL DEFAULT '',
+                pronunciation TEXT NOT NULL DEFAULT '',
                 notes TEXT NOT NULL DEFAULT '',
                 tags TEXT NOT NULL DEFAULT '[]',
                 review_count INTEGER NOT NULL DEFAULT 0,
@@ -123,6 +124,28 @@ def init_language_store() -> None:
             )
             """
         )
+        existing_vocab_cols = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(language_vocab)").fetchall()
+        }
+        if "pronunciation" not in existing_vocab_cols:
+            connection.execute(
+                "ALTER TABLE language_vocab ADD COLUMN pronunciation TEXT NOT NULL DEFAULT ''"
+            )
+            # Backfill: extract "Romaji: ..." lines from notes into pronunciation
+            rows = connection.execute(
+                "SELECT vocab_id, notes FROM language_vocab WHERE notes LIKE '%Romaji:%'"
+            ).fetchall()
+            for row in rows:
+                notes_val = row["notes"] or ""
+                m = re.search(r"Romaji:\s*(.+?)(?:\n|$)", notes_val, re.IGNORECASE)
+                if m:
+                    extracted = m.group(1).strip()
+                    cleaned = re.sub(r"Romaji:\s*.+?(?:\n|$)", "", notes_val, flags=re.IGNORECASE).strip()
+                    connection.execute(
+                        "UPDATE language_vocab SET pronunciation = ?, notes = ? WHERE vocab_id = ?",
+                        (extracted, cleaned, row["vocab_id"]),
+                    )
         connection.commit()
 
 
@@ -194,7 +217,7 @@ def list_vocab_records(user_id: str = APP_DEFAULT_USER_ID, limit: int = 3000) ->
     with _db_lock, closing(_connect()) as connection:
         rows = connection.execute(
             """
-            SELECT vocab_id, language, phrase, translation, notes, tags, review_count,
+            SELECT vocab_id, language, phrase, translation, pronunciation, notes, tags, review_count,
                    last_reviewed_at, next_review_at, created_at, updated_at
             FROM language_vocab
             WHERE user_id = ? AND deleted = 0
@@ -326,6 +349,7 @@ def save_vocab_record(
     language: str,
     phrase: str,
     translation: str,
+    pronunciation: str,
     notes: str,
     tags: list[str],
     user_id: str = APP_DEFAULT_USER_ID,
@@ -336,10 +360,10 @@ def save_vocab_record(
         connection.execute(
             """
             INSERT INTO language_vocab (
-                user_id, vocab_id, language, phrase, translation, notes, tags,
+                user_id, vocab_id, language, phrase, translation, pronunciation, notes, tags,
                 created_at, updated_at, next_review_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -347,6 +371,7 @@ def save_vocab_record(
                 language,
                 phrase,
                 translation,
+                pronunciation,
                 notes,
                 json.dumps(tags),
                 now,
@@ -356,7 +381,7 @@ def save_vocab_record(
         )
         row = connection.execute(
             """
-            SELECT vocab_id, language, phrase, translation, notes, tags, review_count,
+            SELECT vocab_id, language, phrase, translation, pronunciation, notes, tags, review_count,
                    last_reviewed_at, next_review_at, created_at, updated_at
             FROM language_vocab
             WHERE user_id = ? AND vocab_id = ?
@@ -384,6 +409,7 @@ def update_vocab_record(
     vocab_id: str,
     phrase: str,
     translation: str,
+    pronunciation: str,
     notes: str,
     tags: list[str],
     user_id: str = APP_DEFAULT_USER_ID,
@@ -393,14 +419,14 @@ def update_vocab_record(
         connection.execute(
             """
             UPDATE language_vocab
-            SET phrase = ?, translation = ?, notes = ?, tags = ?, updated_at = ?
+            SET phrase = ?, translation = ?, pronunciation = ?, notes = ?, tags = ?, updated_at = ?
             WHERE user_id = ? AND vocab_id = ? AND deleted = 0
             """,
-            (phrase.strip(), translation.strip(), notes.strip(), json.dumps(tags), now, user_id, vocab_id),
+            (phrase.strip(), translation.strip(), pronunciation.strip(), notes.strip(), json.dumps(tags), now, user_id, vocab_id),
         )
         row = connection.execute(
             """
-            SELECT vocab_id, language, phrase, translation, notes, tags, review_count,
+            SELECT vocab_id, language, phrase, translation, pronunciation, notes, tags, review_count,
                    last_reviewed_at, next_review_at, created_at, updated_at
             FROM language_vocab
             WHERE user_id = ? AND vocab_id = ?
@@ -509,7 +535,7 @@ def review_vocab_record(vocab_id: str, remembered: bool, user_id: str = APP_DEFA
         )
         row = connection.execute(
             """
-            SELECT vocab_id, language, phrase, translation, notes, tags, review_count,
+            SELECT vocab_id, language, phrase, translation, pronunciation, notes, tags, review_count,
                    last_reviewed_at, next_review_at, created_at, updated_at
             FROM language_vocab
             WHERE user_id = ? AND vocab_id = ?
@@ -564,6 +590,26 @@ def save_session_record(
         ).fetchone()
         connection.commit()
     return row
+
+
+def list_sessions_for_date_range(
+    start_date: str,
+    end_date: str,
+    user_id: str = APP_DEFAULT_USER_ID,
+) -> list[sqlite3.Row]:
+    with _db_lock, closing(_connect()) as connection:
+        rows = connection.execute(
+            """
+            SELECT session_id, language, mode, minutes, notes, created_at
+            FROM language_sessions
+            WHERE user_id = ?
+              AND created_at >= ?
+              AND created_at < ?
+            ORDER BY created_at ASC
+            """,
+            (user_id, f"{start_date}T00:00:00Z", f"{end_date}T00:00:00Z"),
+        ).fetchall()
+    return list(rows)
 
 
 def get_word_explanation_record(

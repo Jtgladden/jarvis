@@ -91,6 +91,7 @@ type LanguageVocabItem = {
   language: LanguageCode;
   phrase: string;
   translation: string;
+  pronunciation: string;
   notes: string;
   tags: string[];
   review_count: number;
@@ -167,6 +168,7 @@ type ConversationMessage = {
 type LanguageVocabUpdateRequest = {
   phrase: string;
   translation: string;
+  pronunciation: string;
   notes: string;
   tags: string[];
 };
@@ -475,6 +477,7 @@ export default function LanguagePage() {
   const [error, setError] = useState("");
   const [phrase, setPhrase] = useState("");
   const [translation, setTranslation] = useState("");
+  const [pronunciation, setPronunciation] = useState("");
   const [notes, setNotes] = useState("");
   const [tags, setTags] = useState("");
   const [sessionNotes, setSessionNotes] = useState("");
@@ -513,6 +516,7 @@ export default function LanguagePage() {
   const [editingVocabId, setEditingVocabId] = useState<string | null>(null);
   const [editPhrase, setEditPhrase] = useState("");
   const [editTranslation, setEditTranslation] = useState("");
+  const [editPronunciation, setEditPronunciation] = useState("");
   const [editNotes, setEditNotes] = useState("");
   const [vocabUpdating, setVocabUpdating] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -521,6 +525,7 @@ export default function LanguagePage() {
   const [shuffledWordPracticeDeck, setShuffledWordPracticeDeck] = useState<LanguageVocabItem[]>([]);
   const [reviewIndex, setReviewIndex] = useState(0);
   const [reviewRevealed, setReviewRevealed] = useState(false);
+  const [reviewShowNotes, setReviewShowNotes] = useState(false);
   const [hiraganaWeekIndex, setHiraganaWeekIndex] = useState(0);
   const [hiraganaPracticeIndex, setHiraganaPracticeIndex] = useState(0);
   const [hiraganaAnswer, setHiraganaAnswer] = useState("");
@@ -690,6 +695,7 @@ export default function LanguagePage() {
           language: profile.active_language,
           phrase,
           translation,
+          pronunciation,
           notes,
           tags: Array.from(
             new Set([
@@ -704,6 +710,7 @@ export default function LanguagePage() {
       }
       setPhrase("");
       setTranslation("");
+      setPronunciation("");
       setNotes("");
       setTags("");
       await loadDashboard();
@@ -780,6 +787,10 @@ export default function LanguagePage() {
   useEffect(() => {
     setVisibleVocabCount(VOCAB_PAGE_SIZE);
   }, [activeTab, vocabSearch]);
+
+  useEffect(() => {
+    setReviewShowNotes(false);
+  }, [reviewIndex]);
 
   useEffect(() => {
     if (focusWordIndex > 0 && focusWordIndex >= dailyFocusWords.length) {
@@ -1259,6 +1270,7 @@ export default function LanguagePage() {
       const payload: LanguageVocabUpdateRequest = {
         phrase: editPhrase,
         translation: editTranslation,
+        pronunciation: editPronunciation,
         notes: editNotes,
         tags: activeVocabKind === "word" ? ["word"] : [],
       };
@@ -1708,31 +1720,40 @@ export default function LanguagePage() {
                 </div>
 
                 {currentFocusWord ? (
-                  <div className="mt-4 rounded-[1.1rem] border border-white/8 bg-black/20 p-4">
+                  <div
+                    className="mt-4 cursor-pointer rounded-[1.1rem] border border-white/8 bg-black/20 p-4 transition-colors hover:border-cyan-300/20"
+                    onClick={() => setFocusWordRevealed((current) => !current)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setFocusWordRevealed((current) => !current); } }}
+                  >
                     <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                       <div>
                         <div className="text-xs uppercase tracking-[0.16em] text-slate-500">
                           {focusWordIndex + 1} of {dailyFocusWords.length}
                         </div>
                         <div className="mt-3 text-3xl font-semibold text-white">{currentFocusWord.phrase}</div>
-                        {currentFocusWord.notes ? (
-                          <div className="mt-2 text-sm text-cyan-100">{currentFocusWord.notes}</div>
+                        {currentFocusWord.pronunciation ? (
+                          <div className="mt-2 text-sm text-slate-400">{currentFocusWord.pronunciation}</div>
                         ) : null}
                         <div className="mt-4 min-h-10 text-lg text-slate-200">
                           {focusWordRevealed ? currentFocusWord.translation : "Say or type the meaning, then reveal it."}
                         </div>
+                        {focusWordRevealed && currentFocusWord.notes ? (
+                          <div className="mt-2 text-sm text-cyan-100">{currentFocusWord.notes}</div>
+                        ) : null}
                       </div>
                       <div className="flex flex-wrap gap-2 md:justify-end">
-                        <Button variant="outline" className="rounded-2xl" onClick={() => setFocusWordRevealed((current) => !current)}>
+                        <Button variant="outline" className="rounded-2xl" onClick={(e) => { e.stopPropagation(); setFocusWordRevealed((current) => !current); }}>
                           {focusWordRevealed ? "Hide" : "Reveal"}
                         </Button>
-                      <Button variant="outline" className="rounded-2xl" onClick={advanceFocusWord}>
+                      <Button variant="outline" className="rounded-2xl" onClick={(e) => { e.stopPropagation(); advanceFocusWord(); }}>
                         Skip
                       </Button>
                       <Button
                         variant="outline"
                         className="rounded-2xl"
-                        onClick={() => void explainWord(currentFocusWord)}
+                        onClick={(e) => { e.stopPropagation(); void explainWord(currentFocusWord); }}
                         disabled={wordExplanationLoadingId === currentFocusWord.id}
                       >
                         {wordExplanationLoadingId === currentFocusWord.id ? "Loading..." : "Examples"}
@@ -1740,10 +1761,10 @@ export default function LanguagePage() {
                     </div>
                   </div>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      <Button variant="outline" className="rounded-2xl" onClick={() => void markFocusWord(false)}>
+                      <Button variant="outline" className="rounded-2xl" onClick={(e) => { e.stopPropagation(); void markFocusWord(false); }}>
                         Again
                       </Button>
-                      <Button className="rounded-2xl" onClick={() => void markFocusWord(true)}>
+                      <Button className="rounded-2xl" onClick={(e) => { e.stopPropagation(); void markFocusWord(true); }}>
                       Know it
                     </Button>
                   </div>
@@ -2374,8 +2395,11 @@ export default function LanguagePage() {
                           ) : null}
                         </div>
                       )}
-                      {currentPracticeWord.notes ? (
-                        <div className="mt-4 text-sm text-slate-400">{currentPracticeWord.notes}</div>
+                      {currentPracticeWord.pronunciation ? (
+                        <div className="mt-2 text-sm text-slate-400">{currentPracticeWord.pronunciation}</div>
+                      ) : null}
+                      {(wordPracticeRevealed || wordPracticeChecked) && currentPracticeWord.notes ? (
+                        <div className="mt-2 text-sm text-slate-400">{currentPracticeWord.notes}</div>
                       ) : null}
                     </div>
                     <div className="flex flex-wrap gap-2 md:justify-end">
@@ -2476,6 +2500,7 @@ export default function LanguagePage() {
                   placeholder={activeVocabKind === "word" ? "Word" : "Phrase"}
                 />
                 <Input value={translation} onChange={(event) => setTranslation(event.target.value)} placeholder="Translation" />
+                <Input value={pronunciation} onChange={(event) => setPronunciation(event.target.value)} placeholder="Pronunciation (e.g. romaji)" />
                 <Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Tags, comma separated" />
                 <Input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Notes" />
                 <Button className="rounded-2xl" onClick={() => void addVocab()} disabled={vocabSaving || !phrase.trim()}>
@@ -2515,6 +2540,7 @@ export default function LanguagePage() {
                       <div className="space-y-3">
                         <Input value={editPhrase} onChange={(e) => setEditPhrase(e.target.value)} placeholder="Word / phrase" />
                         <Input value={editTranslation} onChange={(e) => setEditTranslation(e.target.value)} placeholder="Translation" />
+                        <Input value={editPronunciation} onChange={(e) => setEditPronunciation(e.target.value)} placeholder="Pronunciation (e.g. romaji)" />
                         <Input value={editNotes} onChange={(e) => setEditNotes(e.target.value)} placeholder="Notes" />
                         <div className="flex gap-2">
                           <Button size="sm" className="rounded-xl" onClick={() => void updateVocab(item.id)} disabled={vocabUpdating || !editPhrase.trim()}>
@@ -2539,6 +2565,7 @@ export default function LanguagePage() {
                               {item.phrase}
                             </button>
                             <div className="mt-1 text-sm text-slate-300">{item.translation}</div>
+                            {item.pronunciation ? <div className="mt-1 text-sm text-slate-400">{item.pronunciation}</div> : null}
                             {item.notes ? <div className="mt-1 text-sm text-cyan-100">{item.notes}</div> : null}
                             {item.tags.filter(isVisibleVocabTag).length ? (
                               <div className="mt-2 flex flex-wrap gap-1">
@@ -2582,6 +2609,7 @@ export default function LanguagePage() {
                                 setEditingVocabId(item.id);
                                 setEditPhrase(item.phrase);
                                 setEditTranslation(item.translation);
+                                setEditPronunciation(item.pronunciation);
                                 setEditNotes(item.notes);
                                 setConfirmDeleteId(null);
                               }}
@@ -2654,7 +2682,13 @@ export default function LanguagePage() {
                 const currentDue = dueVocab[Math.min(reviewIndex, dueVocab.length - 1)];
                 const doneAll = reviewIndex >= dueVocab.length;
                 return (
-                  <div className="rounded-[1.2rem] border border-cyan-300/15 bg-cyan-300/8 p-4">
+                  <div
+                    className={`rounded-[1.2rem] border border-cyan-300/15 bg-cyan-300/8 p-4 ${!doneAll ? "cursor-pointer transition-colors hover:border-cyan-300/25" : ""}`}
+                    onClick={!doneAll ? () => setReviewRevealed((c) => !c) : undefined}
+                    role={!doneAll ? "button" : undefined}
+                    tabIndex={!doneAll ? 0 : undefined}
+                    onKeyDown={!doneAll ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setReviewRevealed((c) => !c); } } : undefined}
+                  >
                     {doneAll ? (
                       <div className="py-4 text-center">
                         <div className="text-lg font-semibold text-white">All caught up!</div>
@@ -2677,7 +2711,6 @@ export default function LanguagePage() {
                         >
                           {currentDue.phrase}
                         </button>
-                        {currentDue.notes ? <div className="mt-2 text-sm text-cyan-100">{currentDue.notes}</div> : null}
                         <div className="mt-4 min-h-8 text-lg text-slate-200">
                           {reviewRevealed ? currentDue.translation || "No translation saved" : "Think of the answer, then reveal."}
                         </div>
@@ -2685,40 +2718,61 @@ export default function LanguagePage() {
                           <Button
                             variant="outline"
                             className="rounded-2xl"
-                            onClick={() => void playLanguageText(`review-${currentDue.id}`, currentDue.language, currentDue.phrase, "slow")}
+                            onClick={(e) => { e.stopPropagation(); void playLanguageText(`review-${currentDue.id}`, currentDue.language, currentDue.phrase, "slow"); }}
                             disabled={Boolean(speechLoadingId)}
                           >
                             <Play className="mr-2 h-4 w-4" />
                             Play
                           </Button>
-                          <Button variant="outline" className="rounded-2xl" onClick={() => setReviewRevealed((c) => !c)}>
+                          <Button variant="outline" className="rounded-2xl" onClick={(e) => { e.stopPropagation(); setReviewRevealed((c) => !c); }}>
                             {reviewRevealed ? "Hide" : "Reveal"}
                           </Button>
                         </div>
+                        {currentDue.pronunciation ? (
+                          <div className="mt-2 text-sm text-slate-400">{currentDue.pronunciation}</div>
+                        ) : null}
                         {reviewRevealed ? (
-                          <div className="mt-4 flex flex-wrap gap-2">
-                            <Button
-                              variant="outline"
-                              className="rounded-2xl"
-                              onClick={async () => {
-                                await reviewVocab(currentDue.id, false);
-                                setReviewIndex((i) => i + 1);
-                                setReviewRevealed(false);
-                              }}
-                            >
-                              Again
-                            </Button>
-                            <Button
-                              className="rounded-2xl"
-                              onClick={async () => {
-                                await reviewVocab(currentDue.id, true);
-                                setReviewIndex((i) => i + 1);
-                                setReviewRevealed(false);
-                              }}
-                            >
-                              Know it
-                            </Button>
-                          </div>
+                          <>
+                            {reviewShowNotes && currentDue.notes ? (
+                              <div className="mt-2 text-sm text-cyan-100">{currentDue.notes}</div>
+                            ) : null}
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              {currentDue.notes ? (
+                                <Button
+                                  variant="outline"
+                                  className="rounded-2xl"
+                                  onClick={(e) => { e.stopPropagation(); setReviewShowNotes((c) => !c); }}
+                                >
+                                  {reviewShowNotes ? "Hide notes" : "Notes"}
+                                </Button>
+                              ) : null}
+                              <Button
+                                variant="outline"
+                                className="rounded-2xl"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  await reviewVocab(currentDue.id, false);
+                                  setReviewIndex((i) => i + 1);
+                                  setReviewRevealed(false);
+                                  setReviewShowNotes(false);
+                                }}
+                              >
+                                Again
+                              </Button>
+                              <Button
+                                className="rounded-2xl"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  await reviewVocab(currentDue.id, true);
+                                  setReviewIndex((i) => i + 1);
+                                  setReviewRevealed(false);
+                                  setReviewShowNotes(false);
+                                }}
+                              >
+                                Know it
+                              </Button>
+                            </div>
+                          </>
                         ) : null}
                       </>
                     )}
