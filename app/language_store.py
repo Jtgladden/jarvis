@@ -3,11 +3,12 @@ import os
 import re
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
-from app.config import APP_DEFAULT_USER_ID, LANGUAGE_DB
+from app.config import APP_DEFAULT_USER_ID, DEFAULT_TIMEZONE, LANGUAGE_DB
 
 _db_lock = Lock()
 SEED_DAILY_WORD_COUNT = 12
@@ -16,6 +17,16 @@ SEED_SCHEDULE_TAG = "seed-scheduled-v2"
 
 def _utc_now() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _today_utc_range() -> tuple[str, str]:
+    tz = ZoneInfo(DEFAULT_TIMEZONE)
+    now_local = datetime.now(tz)
+    local_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_end = local_start + timedelta(days=1)
+    start_utc = local_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_utc = local_end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return start_utc, end_utc
 
 
 def _connect() -> sqlite3.Connection:
@@ -440,7 +451,7 @@ def update_vocab_record(
 
 
 def get_language_stats(language: str, user_id: str = APP_DEFAULT_USER_ID) -> dict:
-    today = datetime.utcnow().date().isoformat()
+    today_start, today_end = _today_utc_range()
     with _db_lock, closing(_connect()) as connection:
         lang_row = connection.execute(
             """
@@ -454,9 +465,9 @@ def get_language_stats(language: str, user_id: str = APP_DEFAULT_USER_ID) -> dic
             """
             SELECT COALESCE(SUM(minutes), 0) AS today_minutes
             FROM language_sessions
-            WHERE user_id = ? AND language = ? AND created_at LIKE ?
+            WHERE user_id = ? AND language = ? AND created_at >= ? AND created_at < ?
             """,
-            (user_id, language, f"{today}%"),
+            (user_id, language, today_start, today_end),
         ).fetchone()
     return {
         "language_sessions_count": lang_row["sessions_count"] if lang_row else 0,
@@ -466,7 +477,7 @@ def get_language_stats(language: str, user_id: str = APP_DEFAULT_USER_ID) -> dic
 
 
 def get_all_language_session_stats(user_id: str = APP_DEFAULT_USER_ID) -> dict[str, dict]:
-    today = datetime.utcnow().date().isoformat()
+    today_start, today_end = _today_utc_range()
     with _db_lock, closing(_connect()) as connection:
         total_rows = connection.execute(
             """
@@ -481,10 +492,10 @@ def get_all_language_session_stats(user_id: str = APP_DEFAULT_USER_ID) -> dict[s
             """
             SELECT language, COALESCE(SUM(minutes), 0) AS today_minutes
             FROM language_sessions
-            WHERE user_id = ? AND created_at LIKE ?
+            WHERE user_id = ? AND created_at >= ? AND created_at < ?
             GROUP BY language
             """,
-            (user_id, f"{today}%"),
+            (user_id, today_start, today_end),
         ).fetchall()
 
     stats: dict[str, dict] = {}
