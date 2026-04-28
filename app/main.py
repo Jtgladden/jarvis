@@ -24,7 +24,7 @@ from app.health_store import init_health_store
 from app.journal import extract_journal_day_citations, get_journal, get_journal_day, save_journal_day
 from app.journal_store import init_journal_store
 from app.language_learning import create_language_conversation_reply, create_language_session, create_language_vocab, delete_language_vocab, explain_language_word, generate_language_practice, get_language_dashboard, get_language_pronunciation_feedback, get_language_writing_feedback, normalize_existing_language_vocab, review_language_vocab, synthesize_language_speech, update_language_profile, update_language_vocab
-from app.language_store import init_language_store
+from app.language_store import init_language_store, purge_kana_in_romanization_records
 from app.movement import list_movement_entries, sync_movement_daily_entry
 from app.movement_store import init_movement_store
 from app.planner import generate_schedule_plan
@@ -199,6 +199,7 @@ def start_background_new_mail_sorter() -> None:
     init_language_store()
     thread = Thread(target=_new_mail_sort_loop, daemon=True)
     thread.start()
+    Thread(target=purge_kana_in_romanization_records, daemon=True).start()
 
 
 @app.get("/")

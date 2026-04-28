@@ -829,8 +829,8 @@ def explain_language_word(payload: LanguageWordExplainRequest) -> LanguageWordEx
         system_prompt=(
             "You explain individual vocabulary words for a language learner. Return strict JSON. "
             "Be practical and concrete: meaning, how to use it, example sentences, and common mistakes. "
-            "For Japanese, always include romanization for the headword and every example, because the learner "
-            "may not read kana or kanji yet. Keep examples beginner-friendly."
+            "For Japanese, always include romaji (Latin alphabet) for the headword and every example — "
+            "never use kana in the romanization fields. The learner may not read kana or kanji yet. Keep examples beginner-friendly."
         ),
         user_payload={
             "language": language_name,
@@ -842,14 +842,14 @@ def explain_language_word(payload: LanguageWordExplainRequest) -> LanguageWordEx
             "json_shape": {
                 "word": "string",
                 "translation": "string",
-                "romanization": "string",
+                "romanization": "romaji in Latin alphabet only — never use kana here",
                 "part_of_speech": "string",
                 "explanation": "string",
                 "usage_notes": ["string"],
                 "examples": [
                     {
                         "target": "sentence in target language",
-                        "romanization": "romanization, required for Japanese",
+                        "romanization": "romaji in Latin alphabet only (e.g. 'ima, benkyou shite imasu'), required for Japanese — never use kana here",
                         "translation": "English translation",
                         "note": "short usage note",
                     }

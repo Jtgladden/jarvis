@@ -687,3 +687,42 @@ def save_word_explanation_record(
         ).fetchone()
         connection.commit()
     return row
+
+
+_KANA_RE = re.compile(r"[぀-ゟ゠-ヿ]")
+
+
+def purge_kana_in_romanization_records() -> int:
+    """Delete cached word explanation records where any romanization field contains kana.
+
+    Returns the number of records deleted. Intended to run once at startup after
+    the prompt fix that enforces Latin-only romanization fields.
+    """
+    deleted = 0
+    with _db_lock, closing(_connect()) as connection:
+        rows = connection.execute(
+            "SELECT user_id, language, level, word_key, payload FROM language_word_explanations"
+        ).fetchall()
+        for row in rows:
+            try:
+                data = json.loads(row["payload"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            bad = bool(_KANA_RE.search(data.get("romanization") or ""))
+            if not bad:
+                for example in data.get("examples") or []:
+                    if _KANA_RE.search(example.get("romanization") or ""):
+                        bad = True
+                        break
+            if bad:
+                connection.execute(
+                    """
+                    DELETE FROM language_word_explanations
+                    WHERE user_id = ? AND language = ? AND level = ? AND word_key = ?
+                    """,
+                    (row["user_id"], row["language"], row["level"], row["word_key"]),
+                )
+                deleted += 1
+        if deleted:
+            connection.commit()
+    return deleted
