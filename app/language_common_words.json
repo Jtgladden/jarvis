@@ -457,22 +457,6 @@
       "notes": "old form of 'mo'"
     },
     {
-      "rank": 58,
-      "word": "wood",
-      "reading": "",
-      "translation": "wood",
-      "part_of_speech": "noun",
-      "notes": "English loanword"
-    },
-    {
-      "rank": 59,
-      "word": "nelson",
-      "reading": "",
-      "translation": "Nelson (name)",
-      "part_of_speech": "noun",
-      "notes": "proper noun"
-    },
-    {
       "rank": 60,
       "word": "huwag",
       "reading": "",
@@ -649,14 +633,6 @@
       "notes": "earth or world"
     },
     {
-      "rank": 82,
-      "word": "reggie",
-      "reading": "",
-      "translation": "Reggie (name)",
-      "part_of_speech": "noun",
-      "notes": "proper noun"
-    },
-    {
       "rank": 83,
       "word": "siguro",
       "reading": "",
@@ -745,14 +721,6 @@
       "notes": "question word for location"
     },
     {
-      "rank": 94,
-      "word": "okay",
-      "reading": "",
-      "translation": "okay",
-      "part_of_speech": "interjection",
-      "notes": "agreement or acceptance"
-    },
-    {
       "rank": 95,
       "word": "kayong",
       "reading": "",
@@ -793,14 +761,6 @@
       "notes": "to say or tell"
     },
     {
-      "rank": 100,
-      "word": "todd",
-      "reading": "",
-      "translation": "Todd (name)",
-      "part_of_speech": "noun",
-      "notes": "proper noun"
-    },
-    {
       "rank": 101,
       "word": "bang",
       "reading": "",
@@ -839,14 +799,6 @@
       "translation": "water",
       "part_of_speech": "noun",
       "notes": "common noun for water"
-    },
-    {
-      "rank": 106,
-      "word": "season",
-      "reading": "",
-      "translation": "season",
-      "part_of_speech": "noun",
-      "notes": "borrowed English word"
     },
     {
       "rank": 107,
@@ -895,14 +847,6 @@
       "translation": "how",
       "part_of_speech": "adverb",
       "notes": "used to ask about manner or method"
-    },
-    {
-      "rank": 113,
-      "word": "elliot",
-      "reading": "",
-      "translation": "Elliot (name)",
-      "part_of_speech": "noun",
-      "notes": "proper noun, personal name"
     },
     {
       "rank": 114,
@@ -1089,14 +1033,6 @@
       "notes": "used to indicate topic"
     },
     {
-      "rank": 137,
-      "word": "cyril",
-      "reading": "",
-      "translation": "Cyril (name)",
-      "part_of_speech": "noun",
-      "notes": "proper noun, personal name"
-    },
-    {
       "rank": 138,
       "word": "tulad",
       "reading": "",
@@ -1111,14 +1047,6 @@
       "translation": "with; companion",
       "part_of_speech": "preposition|noun",
       "notes": "means 'with' or 'companion'"
-    },
-    {
-      "rank": 140,
-      "word": "party",
-      "reading": "",
-      "translation": "party",
-      "part_of_speech": "noun",
-      "notes": "borrowed English word"
     },
     {
       "rank": 141,
@@ -1143,14 +1071,6 @@
       "translation": "beautiful (modifier)",
       "part_of_speech": "adjective",
       "notes": "modifier form of 'maganda'"
-    },
-    {
-      "rank": 144,
-      "word": "dvd",
-      "reading": "",
-      "translation": "DVD",
-      "part_of_speech": "noun",
-      "notes": "borrowed English acronym"
     },
     {
       "rank": 145,
@@ -1191,14 +1111,6 @@
       "translation": "to look at",
       "part_of_speech": "verb",
       "notes": "root word for 'to look' or 'to see'"
-    },
-    {
-      "rank": 150,
-      "word": "detective",
-      "reading": "",
-      "translation": "detective",
-      "part_of_speech": "noun",
-      "notes": "borrowed English word"
     },
     {
       "rank": 151,
@@ -1303,14 +1215,6 @@
       "translation": "to kill",
       "part_of_speech": "verb",
       "notes": "root word for 'to kill'"
-    },
-    {
-      "rank": 164,
-      "word": "shishio",
-      "reading": "",
-      "translation": "Shishio (name)",
-      "part_of_speech": "noun",
-      "notes": "proper noun, personal name"
     },
     {
       "rank": 165,
@@ -1497,14 +1401,6 @@
       "notes": "used to indicate difference"
     },
     {
-      "rank": 188,
-      "word": "show",
-      "reading": "",
-      "translation": "show",
-      "part_of_speech": "noun",
-      "notes": "borrowed English word"
-    },
-    {
       "rank": 189,
       "word": "ginawa",
       "reading": "",
@@ -1519,22 +1415,6 @@
       "translation": "before; formerly",
       "part_of_speech": "adverb",
       "notes": "used to indicate past time"
-    },
-    {
-      "rank": 191,
-      "word": "bear",
-      "reading": "",
-      "translation": "bear",
-      "part_of_speech": "noun",
-      "notes": "borrowed English word"
-    },
-    {
-      "rank": 192,
-      "word": "battosai",
-      "reading": "",
-      "translation": "Battosai (name)",
-      "part_of_speech": "noun",
-      "notes": "proper noun, personal name"
     },
     {
       "rank": 193,
@@ -1617,22 +1497,6 @@
       "notes": "to find out or learn"
     },
     {
-      "rank": 203,
-      "word": "winters",
-      "reading": "",
-      "translation": "winters",
-      "part_of_speech": "noun",
-      "notes": "plural of winter"
-    },
-    {
-      "rank": 204,
-      "word": "ivan",
-      "reading": "",
-      "translation": "Ivan",
-      "part_of_speech": "noun",
-      "notes": "a male given name"
-    },
-    {
       "rank": 205,
       "word": "noon",
       "reading": "",
@@ -1703,14 +1567,6 @@
       "translation": "will see",
       "part_of_speech": "verb",
       "notes": "future tense of kita (to see)"
-    },
-    {
-      "rank": 214,
-      "word": "wow",
-      "reading": "",
-      "translation": "wow",
-      "part_of_speech": "interjection",
-      "notes": "expression of surprise"
     },
     {
       "rank": 215,
@@ -1801,28 +1657,12 @@
       "notes": "competent or excellent"
     },
     {
-      "rank": 226,
-      "word": "j",
-      "reading": "",
-      "translation": "J",
-      "part_of_speech": "noun",
-      "notes": "letter of the alphabet"
-    },
-    {
       "rank": 227,
       "word": "merong",
       "reading": "",
       "translation": "there is",
       "part_of_speech": "verb",
       "notes": "colloquial form of mayroon"
-    },
-    {
-      "rank": 228,
-      "word": "the",
-      "reading": "",
-      "translation": "the",
-      "part_of_speech": "other",
-      "notes": "English definite article"
     },
     {
       "rank": 229,
@@ -1855,14 +1695,6 @@
       "translation": "place",
       "part_of_speech": "noun",
       "notes": "location or area"
-    },
-    {
-      "rank": 233,
-      "word": "cub",
-      "reading": "",
-      "translation": "cub",
-      "part_of_speech": "noun",
-      "notes": "young animal"
     },
     {
       "rank": 234,
@@ -1905,14 +1737,6 @@
       "notes": "part of a play or movie"
     },
     {
-      "rank": 239,
-      "word": "ramone",
-      "reading": "",
-      "translation": "Ramone",
-      "part_of_speech": "noun",
-      "notes": "a male given name"
-    },
-    {
       "rank": 240,
       "word": "mukha",
       "reading": "",
@@ -1937,28 +1761,12 @@
       "notes": "tolerance or forgiveness"
     },
     {
-      "rank": 243,
-      "word": "oh",
-      "reading": "",
-      "translation": "oh",
-      "part_of_speech": "interjection",
-      "notes": "expression of realization or surprise"
-    },
-    {
       "rank": 244,
       "word": "nangyayari",
       "reading": "",
       "translation": "happening",
       "part_of_speech": "verb",
       "notes": "present tense of nangyari (to happen)"
-    },
-    {
-      "rank": 245,
-      "word": "jeremy",
-      "reading": "",
-      "translation": "Jeremy",
-      "part_of_speech": "noun",
-      "notes": "a male given name"
     },
     {
       "rank": 246,
@@ -2009,28 +1817,12 @@
       "notes": "male romantic partner"
     },
     {
-      "rank": 252,
-      "word": "man",
-      "reading": "",
-      "translation": "man",
-      "part_of_speech": "noun",
-      "notes": "adult male"
-    },
-    {
       "rank": 253,
       "word": "kilala",
       "reading": "",
       "translation": "known",
       "part_of_speech": "adjective",
       "notes": "recognized or familiar"
-    },
-    {
-      "rank": 254,
-      "word": "kenshin",
-      "reading": "",
-      "translation": "Kenshin",
-      "part_of_speech": "noun",
-      "notes": "a male given name"
     },
     {
       "rank": 255,
@@ -2145,22 +1937,6 @@
       "notes": "costly or affection"
     },
     {
-      "rank": 269,
-      "word": "episode",
-      "reading": "",
-      "translation": "episode",
-      "part_of_speech": "noun",
-      "notes": "part of a series"
-    },
-    {
-      "rank": 270,
-      "word": "saki",
-      "reading": "",
-      "translation": "Saki",
-      "part_of_speech": "noun",
-      "notes": "a female given name"
-    },
-    {
       "rank": 271,
       "word": "nitong",
       "reading": "",
@@ -2217,28 +1993,12 @@
       "notes": "power or vitality"
     },
     {
-      "rank": 278,
-      "word": "katsuji",
-      "reading": "",
-      "translation": "Katsuji",
-      "part_of_speech": "noun",
-      "notes": "a male given name"
-    },
-    {
       "rank": 279,
       "word": "linggo",
       "reading": "",
       "translation": "week; Sunday",
       "part_of_speech": "noun",
       "notes": "period of seven days or day of the week"
-    },
-    {
-      "rank": 280,
-      "word": "toddy",
-      "reading": "",
-      "translation": "toddy",
-      "part_of_speech": "noun",
-      "notes": "a type of alcoholic drink"
     },
     {
       "rank": 281,
@@ -2257,14 +2017,6 @@
       "notes": "short period of time"
     },
     {
-      "rank": 283,
-      "word": "t",
-      "reading": "",
-      "translation": "T",
-      "part_of_speech": "noun",
-      "notes": "letter of the alphabet"
-    },
-    {
       "rank": 284,
       "word": "halos",
       "reading": "",
@@ -2279,14 +2031,6 @@
       "translation": "going to",
       "part_of_speech": "verb",
       "notes": "future tense of punta (to go)"
-    },
-    {
-      "rank": 286,
-      "word": "miss",
-      "reading": "",
-      "translation": "miss",
-      "part_of_speech": "verb",
-      "notes": "to fail to hit or to long for"
     },
     {
       "rank": 287,
@@ -2430,14 +2174,6 @@
       "reading": "",
       "translation": "problem",
       "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
-      "rank": 305,
-      "word": "hot",
-      "reading": "",
-      "translation": "hot",
-      "part_of_speech": "adjective",
       "notes": ""
     },
     {
@@ -2585,14 +2321,6 @@
       "notes": "past tense"
     },
     {
-      "rank": 324,
-      "word": "turbo",
-      "reading": "",
-      "translation": "turbo",
-      "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
       "rank": 325,
       "word": "huling",
       "reading": "",
@@ -2633,14 +2361,6 @@
       "notes": ""
     },
     {
-      "rank": 330,
-      "word": "card",
-      "reading": "",
-      "translation": "card",
-      "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
       "rank": 331,
       "word": "nilang",
       "reading": "",
@@ -2657,27 +2377,11 @@
       "notes": ""
     },
     {
-      "rank": 333,
-      "word": "honey",
-      "reading": "",
-      "translation": "honey",
-      "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
       "rank": 334,
       "word": "makinig",
       "reading": "",
       "translation": "to listen",
       "part_of_speech": "verb",
-      "notes": ""
-    },
-    {
-      "rank": 335,
-      "word": "bears",
-      "reading": "",
-      "translation": "bears",
-      "part_of_speech": "noun",
       "notes": ""
     },
     {
@@ -2726,14 +2430,6 @@
       "reading": "",
       "translation": "animal",
       "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
-      "rank": 342,
-      "word": "sorry",
-      "reading": "",
-      "translation": "sorry",
-      "part_of_speech": "interjection",
       "notes": ""
     },
     {
@@ -2841,14 +2537,6 @@
       "notes": ""
     },
     {
-      "rank": 356,
-      "word": "butler",
-      "reading": "",
-      "translation": "butler",
-      "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
       "rank": 357,
       "word": "gumagawa",
       "reading": "",
@@ -2869,14 +2557,6 @@
       "word": "mabuti",
       "reading": "",
       "translation": "good",
-      "part_of_speech": "adjective",
-      "notes": ""
-    },
-    {
-      "rank": 360,
-      "word": "uncensored",
-      "reading": "",
-      "translation": "uncensored",
       "part_of_speech": "adjective",
       "notes": ""
     },
@@ -2961,14 +2641,6 @@
       "notes": ""
     },
     {
-      "rank": 371,
-      "word": "s",
-      "reading": "",
-      "translation": "s",
-      "part_of_speech": "other",
-      "notes": "single letter, context needed"
-    },
-    {
       "rank": 372,
       "word": "sarap",
       "reading": "",
@@ -2999,14 +2671,6 @@
       "translation": "polite particle",
       "part_of_speech": "particle",
       "notes": "shows respect"
-    },
-    {
-      "rank": 376,
-      "word": "of",
-      "reading": "",
-      "translation": "of",
-      "part_of_speech": "preposition",
-      "notes": ""
     },
     {
       "rank": 377,
@@ -3046,14 +2710,6 @@
       "reading": "",
       "translation": "to die",
       "part_of_speech": "verb",
-      "notes": ""
-    },
-    {
-      "rank": 382,
-      "word": "contestant",
-      "reading": "",
-      "translation": "contestant",
-      "part_of_speech": "noun",
       "notes": ""
     },
     {
@@ -3265,14 +2921,6 @@
       "notes": ""
     },
     {
-      "rank": 409,
-      "word": "kaoru",
-      "reading": "",
-      "translation": "Kaoru (name)",
-      "part_of_speech": "noun",
-      "notes": "Proper noun, name"
-    },
-    {
       "rank": 410,
       "word": "kanya",
       "reading": "",
@@ -3369,28 +3017,12 @@
       "notes": ""
     },
     {
-      "rank": 422,
-      "word": "carbon",
-      "reading": "",
-      "translation": "carbon",
-      "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
       "rank": 423,
       "word": "karagatan",
       "reading": "",
       "translation": "ocean",
       "part_of_speech": "noun",
       "notes": ""
-    },
-    {
-      "rank": 424,
-      "word": "facebook",
-      "reading": "",
-      "translation": "Facebook",
-      "part_of_speech": "noun",
-      "notes": "Proper noun, social media"
     },
     {
       "rank": 425,
@@ -3481,26 +3113,10 @@
       "notes": ""
     },
     {
-      "rank": 436,
-      "word": "extra",
-      "reading": "",
-      "translation": "extra",
-      "part_of_speech": "adjective",
-      "notes": ""
-    },
-    {
       "rank": 437,
       "word": "pamilya",
       "reading": "",
       "translation": "family",
-      "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
-      "rank": 438,
-      "word": "sex",
-      "reading": "",
-      "translation": "sex",
       "part_of_speech": "noun",
       "notes": ""
     },
@@ -3537,14 +3153,6 @@
       "notes": ""
     },
     {
-      "rank": 443,
-      "word": "sexy",
-      "reading": "",
-      "translation": "sexy",
-      "part_of_speech": "adjective",
-      "notes": ""
-    },
-    {
       "rank": 444,
       "word": "yaman",
       "reading": "",
@@ -3573,14 +3181,6 @@
       "word": "cam",
       "reading": "",
       "translation": "camera (short)",
-      "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
-      "rank": 448,
-      "word": "bar",
-      "reading": "",
-      "translation": "bar",
       "part_of_speech": "noun",
       "notes": ""
     },
@@ -3622,14 +3222,6 @@
       "reading": "",
       "translation": "to give",
       "part_of_speech": "verb",
-      "notes": ""
-    },
-    {
-      "rank": 454,
-      "word": "natural",
-      "reading": "",
-      "translation": "natural",
-      "part_of_speech": "adjective",
       "notes": ""
     },
     {
@@ -3697,30 +3289,6 @@
       "notes": ""
     },
     {
-      "rank": 463,
-      "word": "bartender",
-      "reading": "",
-      "translation": "bartender",
-      "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
-      "rank": 464,
-      "word": "iori",
-      "reading": "",
-      "translation": "Iori (name)",
-      "part_of_speech": "noun",
-      "notes": "Proper noun, name"
-    },
-    {
-      "rank": 465,
-      "word": "ring",
-      "reading": "",
-      "translation": "ring",
-      "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
       "rank": 466,
       "word": "itsura",
       "reading": "",
@@ -3777,22 +3345,6 @@
       "notes": ""
     },
     {
-      "rank": 473,
-      "word": "hello",
-      "reading": "",
-      "translation": "hello",
-      "part_of_speech": "interjection",
-      "notes": ""
-    },
-    {
-      "rank": 474,
-      "word": "boyfriend",
-      "reading": "",
-      "translation": "boyfriend",
-      "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
       "rank": 475,
       "word": "pakialam",
       "reading": "",
@@ -3817,28 +3369,12 @@
       "notes": ""
     },
     {
-      "rank": 478,
-      "word": "thanksgiving",
-      "reading": "",
-      "translation": "Thanksgiving",
-      "part_of_speech": "noun",
-      "notes": ""
-    },
-    {
       "rank": 479,
       "word": "bumili",
       "reading": "",
       "translation": "to buy",
       "part_of_speech": "verb",
       "notes": ""
-    },
-    {
-      "rank": 480,
-      "word": "dubai",
-      "reading": "",
-      "translation": "Dubai",
-      "part_of_speech": "noun",
-      "notes": "Proper noun, place"
     },
     {
       "rank": 481,
@@ -3855,14 +3391,6 @@
       "translation": "father (informal)",
       "part_of_speech": "noun",
       "notes": ""
-    },
-    {
-      "rank": 483,
-      "word": "danny",
-      "reading": "",
-      "translation": "Danny (name)",
-      "part_of_speech": "noun",
-      "notes": "Proper noun, name"
     },
     {
       "rank": 484,
@@ -3913,14 +3441,6 @@
       "notes": ""
     },
     {
-      "rank": 490,
-      "word": "okubo",
-      "reading": "",
-      "translation": "Okubo (name)",
-      "part_of_speech": "noun",
-      "notes": "Proper noun, name"
-    },
-    {
       "rank": 491,
       "word": "katulad",
       "reading": "",
@@ -3934,14 +3454,6 @@
       "reading": "",
       "translation": "will get",
       "part_of_speech": "verb",
-      "notes": ""
-    },
-    {
-      "rank": 493,
-      "word": "pool",
-      "reading": "",
-      "translation": "pool",
-      "part_of_speech": "noun",
       "notes": ""
     },
     {
@@ -4025,22 +3537,6 @@
       "notes": "place of work"
     },
     {
-      "rank": 504,
-      "word": "uh",
-      "reading": "",
-      "translation": "uh",
-      "part_of_speech": "interjection",
-      "notes": "hesitation sound"
-    },
-    {
-      "rank": 505,
-      "word": "pendleton",
-      "reading": "",
-      "translation": "Pendleton (name)",
-      "part_of_speech": "noun",
-      "notes": "proper noun, usually a name"
-    },
-    {
       "rank": 506,
       "word": "buti",
       "reading": "",
@@ -4097,38 +3593,6 @@
       "notes": "thought or belief"
     },
     {
-      "rank": 513,
-      "word": "where",
-      "reading": "",
-      "translation": "where",
-      "part_of_speech": "adverb",
-      "notes": "English word included in Tagalog text"
-    },
-    {
-      "rank": 514,
-      "word": "trainer",
-      "reading": "",
-      "translation": "trainer",
-      "part_of_speech": "noun",
-      "notes": "English loanword"
-    },
-    {
-      "rank": 515,
-      "word": "springs",
-      "reading": "",
-      "translation": "springs",
-      "part_of_speech": "noun",
-      "notes": "English plural noun"
-    },
-    {
-      "rank": 516,
-      "word": "are",
-      "reading": "",
-      "translation": "are",
-      "part_of_speech": "verb",
-      "notes": "English verb"
-    },
-    {
       "rank": 517,
       "word": "yata",
       "reading": "",
@@ -4175,14 +3639,6 @@
       "translation": "death",
       "part_of_speech": "noun",
       "notes": "the act or state of dying"
-    },
-    {
-      "rank": 523,
-      "word": "martini",
-      "reading": "",
-      "translation": "martini",
-      "part_of_speech": "noun",
-      "notes": "cocktail drink"
     },
     {
       "rank": 524,
@@ -4257,28 +3713,12 @@
       "notes": "wrongdoing or guilt"
     },
     {
-      "rank": 533,
-      "word": "potter",
-      "reading": "",
-      "translation": "potter",
-      "part_of_speech": "noun",
-      "notes": "person who makes pottery"
-    },
-    {
       "rank": 534,
       "word": "ginamit",
       "reading": "",
       "translation": "used",
       "part_of_speech": "verb",
       "notes": "past tense of 'to use'"
-    },
-    {
-      "rank": 535,
-      "word": "burns",
-      "reading": "",
-      "translation": "burns",
-      "part_of_speech": "verb",
-      "notes": "English verb"
     },
     {
       "rank": 536,
@@ -4313,14 +3753,6 @@
       "notes": "farming and cultivation"
     },
     {
-      "rank": 540,
-      "word": "non",
-      "reading": "",
-      "translation": "non",
-      "part_of_speech": "prefix",
-      "notes": "English prefix meaning 'not'"
-    },
-    {
       "rank": 541,
       "word": "kumuha",
       "reading": "",
@@ -4337,36 +3769,12 @@
       "notes": "infinitive form"
     },
     {
-      "rank": 543,
-      "word": "casting",
-      "reading": "",
-      "translation": "casting",
-      "part_of_speech": "noun",
-      "notes": "English loanword"
-    },
-    {
-      "rank": 544,
-      "word": "chest",
-      "reading": "",
-      "translation": "chest",
-      "part_of_speech": "noun",
-      "notes": "English noun"
-    },
-    {
       "rank": 545,
       "word": "kundi",
       "reading": "",
       "translation": "but rather",
       "part_of_speech": "conjunction",
       "notes": "used to correct or contrast"
-    },
-    {
-      "rank": 546,
-      "word": "george",
-      "reading": "",
-      "translation": "George (name)",
-      "part_of_speech": "noun",
-      "notes": "proper noun"
     },
     {
       "rank": 547,
@@ -4441,14 +3849,6 @@
       "notes": "means or manner"
     },
     {
-      "rank": 556,
-      "word": "web",
-      "reading": "",
-      "translation": "web",
-      "part_of_speech": "noun",
-      "notes": "English loanword"
-    },
-    {
       "rank": 557,
       "word": "gaano",
       "reading": "",
@@ -4463,14 +3863,6 @@
       "translation": "looking at",
       "part_of_speech": "verb",
       "notes": "present progressive form"
-    },
-    {
-      "rank": 559,
-      "word": "aoshi",
-      "reading": "",
-      "translation": "Aoshi (name)",
-      "part_of_speech": "noun",
-      "notes": "proper noun, Japanese name"
     },
     {
       "rank": 560,
@@ -4495,14 +3887,6 @@
       "translation": "continue; proceed",
       "part_of_speech": "verb; adverb",
       "notes": "can be verb or adverb"
-    },
-    {
-      "rank": 563,
-      "word": "laptop",
-      "reading": "",
-      "translation": "laptop",
-      "part_of_speech": "noun",
-      "notes": "English loanword"
     },
     {
       "rank": 564,
@@ -4537,22 +3921,6 @@
       "notes": "time that has passed"
     },
     {
-      "rank": 568,
-      "word": "ice",
-      "reading": "",
-      "translation": "ice",
-      "part_of_speech": "noun",
-      "notes": "English noun"
-    },
-    {
-      "rank": 569,
-      "word": "zombie",
-      "reading": "",
-      "translation": "zombie",
-      "part_of_speech": "noun",
-      "notes": "English loanword"
-    },
-    {
       "rank": 570,
       "word": "sampung",
       "reading": "",
@@ -4583,22 +3951,6 @@
       "translation": "searching",
       "part_of_speech": "verb",
       "notes": "present progressive form of 'to look for'"
-    },
-    {
-      "rank": 574,
-      "word": "gym",
-      "reading": "",
-      "translation": "gym",
-      "part_of_speech": "noun",
-      "notes": "English loanword"
-    },
-    {
-      "rank": 575,
-      "word": "species",
-      "reading": "",
-      "translation": "species",
-      "part_of_speech": "noun",
-      "notes": "English loanword"
     },
     {
       "rank": 576,
@@ -4641,14 +3993,6 @@
       "notes": "present progressive passive form"
     },
     {
-      "rank": 581,
-      "word": "asami",
-      "reading": "",
-      "translation": "Asami (name)",
-      "part_of_speech": "noun",
-      "notes": "proper noun, Japanese name"
-    },
-    {
       "rank": 582,
       "word": "sakit",
       "reading": "",
@@ -4663,14 +4007,6 @@
       "translation": "to forgive",
       "part_of_speech": "verb",
       "notes": "infinitive form"
-    },
-    {
-      "rank": 584,
-      "word": "outtakes",
-      "reading": "",
-      "translation": "outtakes",
-      "part_of_speech": "noun",
-      "notes": "English loanword"
     },
     {
       "rank": 585,
@@ -4695,14 +4031,6 @@
       "translation": "I don't want",
       "part_of_speech": "verb",
       "notes": "negative form with actor focus"
-    },
-    {
-      "rank": 588,
-      "word": "shogun",
-      "reading": "",
-      "translation": "shogun",
-      "part_of_speech": "noun",
-      "notes": "Japanese military leader"
     },
     {
       "rank": 589,
@@ -4791,14 +4119,6 @@
       "translation": "broke; destroyed",
       "part_of_speech": "verb",
       "notes": "past tense of 'to break'"
-    },
-    {
-      "rank": 600,
-      "word": "mary",
-      "reading": "",
-      "translation": "Mary (name)",
-      "part_of_speech": "noun",
-      "notes": "proper noun"
     }
   ],
   "hiligaynon": [
@@ -11061,14 +10381,6 @@
       "notes": "Kana: けっこん. Romaji: kekkon."
     },
     {
-      "rank": 183,
-      "word": "ジョン",
-      "reading": "jon",
-      "translation": "John",
-      "part_of_speech": "other",
-      "notes": "Kana: じょん. Romaji: jon."
-    },
-    {
       "rank": 184,
       "word": "方法",
       "reading": "houhou",
@@ -11131,14 +10443,6 @@
       "translation": "power",
       "part_of_speech": "other",
       "notes": "Kana: ちから. Romaji: chikara."
-    },
-    {
-      "rank": 192,
-      "word": "I",
-      "reading": "ai",
-      "translation": "love",
-      "part_of_speech": "other",
-      "notes": "Kana: あい. Romaji: ai."
     },
     {
       "rank": 193,
@@ -11475,14 +10779,6 @@
       "translation": "to take out",
       "part_of_speech": "other",
       "notes": "Kana: だす. Romaji: dasu."
-    },
-    {
-      "rank": 235,
-      "word": "L",
-      "reading": "eru",
-      "translation": "L",
-      "part_of_speech": "other",
-      "notes": "Kana: える. Romaji: eru."
     },
     {
       "rank": 236,
@@ -11829,14 +11125,6 @@
       "notes": "Kana: げんき. Romaji: genki."
     },
     {
-      "rank": 279,
-      "word": "the",
-      "reading": "za",
-      "translation": "the",
-      "part_of_speech": "other",
-      "notes": "Kana: ざ. Romaji: za."
-    },
-    {
       "rank": 280,
       "word": "船",
       "reading": "fune",
@@ -12149,14 +11437,6 @@
       "notes": "Kana: めいれい. Romaji: meirei."
     },
     {
-      "rank": 319,
-      "word": "you",
-      "reading": "you",
-      "translation": "you",
-      "part_of_speech": "other",
-      "notes": "Kana: you. Romaji: you."
-    },
-    {
       "rank": 320,
       "word": "多く",
       "reading": "ooku",
@@ -12429,14 +11709,6 @@
       "notes": "Kana: おく. Romaji: oku."
     },
     {
-      "rank": 354,
-      "word": "FBI",
-      "reading": "efubiーai",
-      "translation": "FBI",
-      "part_of_speech": "other",
-      "notes": "Kana: えふびーあい. Romaji: efubiーai."
-    },
-    {
       "rank": 355,
       "word": "助け",
       "reading": "tasuke",
@@ -12523,14 +11795,6 @@
       "translation": "country",
       "part_of_speech": "other",
       "notes": "Kana: くに. Romaji: kuni."
-    },
-    {
-      "rank": 366,
-      "word": "a",
-      "reading": "a",
-      "translation": "a",
-      "part_of_speech": "other",
-      "notes": "Kana: a. Romaji: a."
     },
     {
       "rank": 367,
@@ -13029,22 +12293,6 @@
       "notes": "Kana: しずか. Romaji: shizuka."
     },
     {
-      "rank": 429,
-      "word": "ジェーン",
-      "reading": "ジェーン",
-      "translation": "Jane",
-      "part_of_speech": "other",
-      "notes": "Kana: ジェーン. Romaji: ジェーン."
-    },
-    {
-      "rank": 430,
-      "word": "s",
-      "reading": "ｓ",
-      "translation": "s",
-      "part_of_speech": "other",
-      "notes": "Kana: ｓ. Romaji: ｓ."
-    },
-    {
       "rank": 431,
       "word": "地球",
       "reading": "chikyuu",
@@ -13245,14 +12493,6 @@
       "notes": "Kana: たがい. Romaji: tagai."
     },
     {
-      "rank": 456,
-      "word": "ｱﾙﾏﾝ",
-      "reading": "aruman",
-      "translation": "Arman",
-      "part_of_speech": "other",
-      "notes": "Kana: あるまん. Romaji: aruman."
-    },
-    {
       "rank": 457,
       "word": "買う",
       "reading": "kau",
@@ -13291,14 +12531,6 @@
       "translation": "case",
       "part_of_speech": "other",
       "notes": "Kana: ばあい. Romaji: baai."
-    },
-    {
-      "rank": 462,
-      "word": "美咲",
-      "reading": "misaki",
-      "translation": "Misaki",
-      "part_of_speech": "other",
-      "notes": "Kana: みさき. Romaji: misaki."
     },
     {
       "rank": 463,
@@ -13789,14 +13021,6 @@
       "notes": "Kana: おと. Romaji: oto."
     },
     {
-      "rank": 524,
-      "word": "サム",
-      "reading": "サム",
-      "translation": "Sam",
-      "part_of_speech": "other",
-      "notes": "Kana: サム. Romaji: サム."
-    },
-    {
       "rank": 525,
       "word": "必ず",
       "reading": "kanarazu",
@@ -14043,14 +13267,6 @@
       "translation": "genuine article",
       "part_of_speech": "other",
       "notes": "Kana: ほんもの. Romaji: honmono."
-    },
-    {
-      "rank": 556,
-      "word": "ピーター",
-      "reading": "piーtaー",
-      "translation": "Peter",
-      "part_of_speech": "other",
-      "notes": "Kana: ぴーたー. Romaji: piーtaー."
     },
     {
       "rank": 557,
@@ -18895,14 +18111,6 @@
       "notes": ""
     },
     {
-      "rank": 562,
-      "word": "john",
-      "reading": "",
-      "translation": "John",
-      "part_of_speech": "proper noun",
-      "notes": ""
-    },
-    {
       "rank": 563,
       "word": "murió",
       "reading": "",
@@ -19173,14 +18381,6 @@
       "translation": "he/she had",
       "part_of_speech": "verb",
       "notes": "preterite of 'tener'"
-    },
-    {
-      "rank": 597,
-      "word": "jack",
-      "reading": "",
-      "translation": "Jack",
-      "part_of_speech": "proper noun",
-      "notes": ""
     },
     {
       "rank": 598,

@@ -4,13 +4,10 @@ from datetime import datetime
 from hashlib import sha1
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
-
 from fastapi import UploadFile
 from openai import OpenAI
 
 from app.config import (
-    DEFAULT_TIMEZONE,
     OPENAI_API_KEY,
     OPENAI_LANGUAGE_MAX_TOKENS,
     OPENAI_LANGUAGE_MODEL,
@@ -18,7 +15,6 @@ from app.config import (
     OPENAI_TTS_MODEL,
     OPENAI_TTS_VOICE,
 )
-from app.journal_store import list_journal_entries, upsert_journal_entry
 from app.schemas import (
     LanguageCode,
     LanguageConversationRequest,
@@ -227,7 +223,7 @@ def _session_from_record(row) -> LanguagePracticeSession:
 def _load_common_words() -> dict[str, list[dict]]:
     if not COMMON_WORDS_PATH.exists():
         return {}
-    return json.loads(COMMON_WORDS_PATH.read_text())
+    return json.loads(COMMON_WORDS_PATH.read_text(encoding="utf-8"))
 
 
 def _ensure_common_words_seeded(user_id: str) -> None:
@@ -557,35 +553,6 @@ def create_language_session(payload: LanguagePracticeSessionCreateRequest) -> La
         user_id=user_id,
     )
     session = _session_from_record(row)
-
-    try:
-        tz = ZoneInfo(DEFAULT_TIMEZONE)
-        local_time = datetime.now(tz).strftime("%H:%M")
-        entry_date = datetime.now(tz).date().isoformat()
-        note_text = session.notes.strip()
-        line = f"{local_time} · Language practice · {payload.language} · {payload.mode} · {session.minutes}m"
-        if note_text:
-            line = f"{line} · {note_text}"
-
-        existing = list_journal_entries(user_id=user_id).get(entry_date, {})
-        existing_entry = str(existing.get("journal_entry") or "").rstrip()
-        updated_entry = f"{existing_entry}\n{line}".strip() if existing_entry else line
-
-        upsert_journal_entry(
-            entry_date=entry_date,
-            journal_entry=updated_entry,
-            accomplishments=str(existing.get("accomplishments") or ""),
-            gratitude_entry=str(existing.get("gratitude_entry") or ""),
-            scripture_study=str(existing.get("scripture_study") or ""),
-            spiritual_notes=str(existing.get("spiritual_notes") or ""),
-            study_links_json=str(existing.get("study_links_json") or "[]"),
-            photo_data_url=existing.get("photo_data_url"),
-            calendar_items_json=str(existing.get("calendar_items_json") or "[]"),
-            user_id=user_id,
-        )
-    except Exception as exc:
-        logger.warning("Unable to append language session to journal: %s", exc)
-
     return session
 
 

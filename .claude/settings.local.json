@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(npm install *)",
+      "Bash(python -c \"from app.language_store import get_all_language_session_stats; print\\(get_all_language_session_stats\\(\\)\\)\")",
+      "Bash(python -c \"from app.language_learning import get_language_dashboard; import json; result = get_language_dashboard\\(\\); print\\('OK'\\)\")",
+      "Bash(python -c \"from app.language_learning import get_language_dashboard; get_language_dashboard\\(\\); print\\('OK'\\)\")",
+      "Bash(python -c ' *)"
+    ]
+  }
+}
