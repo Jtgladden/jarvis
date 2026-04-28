@@ -510,6 +510,12 @@ export default function LanguagePage() {
   const [focusWordRevealed, setFocusWordRevealed] = useState(false);
   const [wordExplanations, setWordExplanations] = useState<Record<string, WordExplanation>>({});
   const [wordExplanationLoadingId, setWordExplanationLoadingId] = useState<string | null>(null);
+  const [exploredWords, setExploredWords] = useState<Record<string, WordExplanation>>({});
+  const [exploringHistory, setExploringHistory] = useState<{ language: LanguageCode; word: string }[]>([]);
+  const [exploringIndex, setExploringIndex] = useState(-1);
+  const [exploredWordLoading, setExploredWordLoading] = useState(false);
+  const [explorerSaving, setExplorerSaving] = useState(false);
+  const [explorerSavedKeys, setExplorerSavedKeys] = useState<Set<string>>(new Set());
   const [vocabSearch, setVocabSearch] = useState("");
   const [visibleVocabCount, setVisibleVocabCount] = useState(VOCAB_PAGE_SIZE);
   const [profileExpanded, setProfileExpanded] = useState(false);
@@ -1227,6 +1233,86 @@ export default function LanguagePage() {
     }
   };
 
+  const exploreExampleWord = async (word: string, language: LanguageCode) => {
+    const trimmed = word.trim();
+    if (!trimmed || /^[\s　、。！？、。！？,.!?]+$/.test(trimmed)) return;
+    const newIndex = exploringIndex + 1;
+    setExploringHistory((prev) => [...prev.slice(0, newIndex), { language, word: trimmed }]);
+    setExploringIndex(newIndex);
+    const key = `${language}:${trimmed}`;
+    if (exploredWords[key]) return;
+    setExploredWordLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/languages/words/explain`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language, level: profile.level, word: trimmed, translation: "", notes: "" }),
+      });
+      if (!response.ok) throw new Error(`Status ${response.status}`);
+      const data: WordExplanation = await response.json();
+      setExploredWords((prev) => ({ ...prev, [key]: data }));
+    } catch {
+      setExploringHistory((prev) => prev.slice(0, newIndex));
+      setExploringIndex(newIndex - 1);
+    } finally {
+      setExploredWordLoading(false);
+    }
+  };
+
+  const addWordFromExplorer = async (exp: WordExplanation, language: LanguageCode) => {
+    const key = `${language}:${exp.word}`;
+    setExplorerSaving(true);
+    try {
+      const response = await fetch(`${API_BASE}/languages/vocab`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          language,
+          phrase: exp.word,
+          translation: exp.translation,
+          pronunciation: exp.romanization,
+          notes: exp.usage_notes.slice(0, 1).join("") || "",
+          tags: ["word", exp.part_of_speech].filter(Boolean),
+        }),
+      });
+      if (!response.ok) throw new Error(`Status ${response.status}`);
+      setExplorerSavedKeys((prev) => new Set(prev).add(key));
+    } catch {
+      // silently fail — user can retry
+    } finally {
+      setExplorerSaving(false);
+    }
+  };
+
+  const segmentForExplore = (text: string, language: LanguageCode): React.ReactNode => {
+    const locale = language === "japanese" ? "ja" : language === "spanish" ? "es" : language === "tagalog" ? "tl" : undefined;
+    type Seg = { text: string; isWord: boolean };
+    let segments: Seg[];
+    try {
+      const segmenter = new Intl.Segmenter(locale, { granularity: "word" });
+      segments = [...segmenter.segment(text)].map((s) => ({ text: s.segment, isWord: s.isWordLike ?? false }));
+    } catch {
+      segments = text.split(/(\s+)/).map((s) => ({ text: s, isWord: /\S/.test(s) }));
+    }
+    return (
+      <>
+        {segments.map((seg, i) =>
+          seg.isWord ? (
+            <span
+              key={i}
+              className="cursor-pointer rounded px-px transition-colors hover:bg-cyan-300/20 hover:text-cyan-200"
+              onClick={() => void exploreExampleWord(seg.text, language)}
+            >
+              {seg.text}
+            </span>
+          ) : (
+            <span key={i}>{seg.text}</span>
+          )
+        )}
+      </>
+    );
+  };
+
   const deleteVocab = async (id: string) => {
     setVocabDeleting(id);
     setConfirmDeleteId(null);
@@ -1369,8 +1455,10 @@ export default function LanguagePage() {
             <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Examples</div>
             {explanation.examples.map((example, index) => (
               <div key={`${example.target}-${index}`} className="rounded-xl bg-black/20 p-3 text-sm">
-                <div className="font-medium text-white">{example.target}</div>
-                {example.romanization ? <div className="mt-1 text-cyan-100">{example.romanization}</div> : null}
+                <div className="font-medium text-white">{segmentForExplore(example.target, item.language)}</div>
+                {example.romanization ? (
+                  <div className="mt-1 text-cyan-100">{segmentForExplore(example.romanization, item.language)}</div>
+                ) : null}
                 <div className="mt-1 text-slate-300">{example.translation}</div>
                 {example.note ? <div className="mt-1 text-xs text-slate-500">{example.note}</div> : null}
               </div>
@@ -1744,6 +1832,15 @@ export default function LanguagePage() {
                         ) : null}
                       </div>
                       <div className="flex flex-wrap gap-2 md:justify-end">
+                        <Button
+                          variant="outline"
+                          className="rounded-2xl"
+                          onClick={(e) => { e.stopPropagation(); void playLanguageText(`focus-word-${currentFocusWord.id}`, currentFocusWord.language, currentFocusWord.phrase, "slow"); }}
+                          disabled={Boolean(speechLoadingId)}
+                        >
+                          <Play className="mr-2 h-4 w-4" />
+                          {speechLoadingId === `focus-word-${currentFocusWord.id}-slow` ? "Loading..." : "Play"}
+                        </Button>
                         <Button variant="outline" className="rounded-2xl" onClick={(e) => { e.stopPropagation(); setFocusWordRevealed((current) => !current); }}>
                           {focusWordRevealed ? "Hide" : "Reveal"}
                         </Button>
@@ -2811,6 +2908,150 @@ export default function LanguagePage() {
         </div>
         ) : null}
       </div>
+
+      {exploringIndex >= 0 ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end bg-black/50 backdrop-blur-sm"
+          onClick={() => { setExploringHistory([]); setExploringIndex(-1); }}
+        >
+          <div
+            className="max-h-[72vh] w-full overflow-y-auto rounded-t-2xl border-t border-white/10 bg-slate-900 p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <button
+                  className="text-sm text-slate-400 transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+                  disabled={exploringIndex === 0}
+                  onClick={() => setExploringIndex((i) => i - 1)}
+                >
+                  ←
+                </button>
+                <button
+                  className="text-sm text-slate-400 transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+                  disabled={exploringIndex >= exploringHistory.length - 1}
+                  onClick={() => setExploringIndex((i) => i + 1)}
+                >
+                  →
+                </button>
+                <div className="ml-1 text-xs uppercase tracking-[0.16em] text-slate-400">Word explorer</div>
+              </div>
+              <button
+                className="text-lg leading-none text-slate-500 hover:text-white"
+                onClick={() => { setExploringHistory([]); setExploringIndex(-1); }}
+              >
+                ✕
+              </button>
+            </div>
+            {exploredWordLoading && (
+              <div className="text-sm text-slate-400">Loading…</div>
+            )}
+            {!exploredWordLoading && (() => {
+              const exploringWord = exploringHistory[exploringIndex];
+              if (!exploringWord) return null;
+              const key = `${exploringWord.language}:${exploringWord.word}`;
+              const exp = exploredWords[key];
+              if (!exp) return null;
+              const wordLower = exp.word.toLowerCase();
+              const alreadySaved =
+                explorerSavedKeys.has(key) ||
+                (dashboard?.vocab ?? []).some(
+                  (v) =>
+                    v.language === exploringWord.language &&
+                    (v.phrase.toLowerCase() === wordLower ||
+                      v.pronunciation.toLowerCase() === wordLower)
+                );
+              return (
+                <div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="text-slate-400 transition-colors hover:text-white disabled:opacity-30"
+                          disabled={Boolean(speechLoadingId)}
+                          onClick={() => void playLanguageText(`explorer-${exploringWord.language}-${exp.word}`, exploringWord.language, exp.word, "slow")}
+                        >
+                          <Play className="h-4 w-4" />
+                        </button>
+                        <div>
+                          <div className="text-sm font-medium text-white">
+                            {exp.word}
+                            {exp.romanization ? <span className="ml-2 text-cyan-100">{exp.romanization}</span> : null}
+                          </div>
+                          <div className="text-sm text-slate-300">{exp.translation}</div>
+                          {exp.part_of_speech ? (
+                            <div className="text-xs uppercase tracking-[0.14em] text-slate-500">{exp.part_of_speech}</div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      {alreadySaved ? (
+                        <div className="rounded-xl border border-cyan-300/30 px-3 py-1 text-xs text-cyan-300">Saved</div>
+                      ) : (
+                      <Button
+                        size="sm"
+                        className="rounded-xl"
+                        disabled={explorerSaving}
+                        onClick={() => void addWordFromExplorer(exp, exploringWord.language)}
+                      >
+                        {explorerSaving ? "Saving…" : "+ Add to vocab"}
+                      </Button>
+                    )}
+                    </div>
+                  </div>
+                  {exp.explanation ? (
+                    <p className="mt-3 text-sm leading-6 text-slate-300">{exp.explanation}</p>
+                  ) : null}
+                  {exp.usage_notes.length ? (
+                    <div className="mt-4">
+                      <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Usage</div>
+                      <ul className="mt-2 space-y-1 text-sm text-slate-300">
+                        {exp.usage_notes.map((note) => (
+                          <li key={note}>- {note}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {exp.examples.length ? (
+                    <div className="mt-4 space-y-3">
+                      <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Examples</div>
+                      {exp.examples.map((ex, i) => (
+                        <div key={i} className="rounded-xl bg-black/20 p-3 text-sm">
+                          <div className="font-medium text-white">
+                            {segmentForExplore(ex.target, exploringWord.language)}
+                          </div>
+                          {ex.romanization ? (
+                            <div className="mt-1 text-cyan-100">
+                              {segmentForExplore(ex.romanization, exploringWord.language)}
+                            </div>
+                          ) : null}
+                          <div className="mt-1 text-slate-300">{ex.translation}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {exp.common_mistakes.length ? (
+                    <div className="mt-4">
+                      <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Watch for</div>
+                      <ul className="mt-2 space-y-1 text-sm text-slate-300">
+                        {exp.common_mistakes.map((m) => (
+                          <li key={m}>- {m}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {exp.quick_drill ? (
+                    <div className="mt-4 rounded-xl border border-white/8 bg-white/5 p-3 text-sm text-cyan-100">
+                      {exp.quick_drill}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

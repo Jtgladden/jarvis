@@ -726,3 +726,78 @@ def purge_kana_in_romanization_records() -> int:
         if deleted:
             connection.commit()
     return deleted
+
+
+def purge_kana_in_vocab_pronunciation() -> int:
+    """Replace kana in Japanese vocab pronunciation fields with romaji from cached explanations,
+    or clear to empty so normalization can refill it later.
+
+    Returns the number of records updated.
+    """
+    updated = 0
+    with _db_lock, closing(_connect()) as connection:
+        rows = connection.execute(
+            "SELECT vocab_id, user_id, phrase, translation, pronunciation FROM language_vocab "
+            "WHERE language = 'japanese' AND deleted = 0"
+        ).fetchall()
+        for row in rows:
+            if not _KANA_RE.search(row["pronunciation"] or ""):
+                continue
+            word_key = _normalize_text(f"{row['phrase']}:{row['translation']}")
+            exp_row = connection.execute(
+                "SELECT payload FROM language_word_explanations "
+                "WHERE user_id = ? AND language = 'japanese' AND word_key = ? LIMIT 1",
+                (row["user_id"], word_key),
+            ).fetchone()
+            new_pronunciation = ""
+            if exp_row:
+                try:
+                    data = json.loads(exp_row["payload"])
+                    r = data.get("romanization") or ""
+                    if r and not _KANA_RE.search(r):
+                        new_pronunciation = r
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            connection.execute(
+                "UPDATE language_vocab SET pronunciation = ?, updated_at = ? WHERE vocab_id = ?",
+                (new_pronunciation, _utc_now(), row["vocab_id"]),
+            )
+            updated += 1
+        if updated:
+            connection.commit()
+    return updated
+
+
+_ROMAJI_IN_NOTES_RE = re.compile(r"Romaji:\s*([^\.\n]+?)\.?\s*(?:\n|$)", re.IGNORECASE)
+_KANA_IN_NOTES_RE = re.compile(r"Kana:\s*\S+\.?\s*(?:\n|$)?", re.IGNORECASE)
+
+
+def backfill_pronunciation_from_notes() -> int:
+    """Move romaji from notes into the pronunciation field for vocab items where pronunciation
+    is empty but notes contains 'Romaji: ...' text (legacy save format).
+
+    Also strips 'Kana: ...' segments from notes since that info belongs in pronunciation.
+    Returns the number of records updated. Safe to run on every startup.
+    """
+    updated = 0
+    with _db_lock, closing(_connect()) as connection:
+        rows = connection.execute(
+            "SELECT vocab_id, notes, pronunciation FROM language_vocab "
+            "WHERE pronunciation = '' AND notes LIKE '%Romaji:%' AND deleted = 0"
+        ).fetchall()
+        for row in rows:
+            notes_val = row["notes"] or ""
+            m = _ROMAJI_IN_NOTES_RE.search(notes_val)
+            if not m:
+                continue
+            romaji = m.group(1).strip().rstrip(".")
+            cleaned = _ROMAJI_IN_NOTES_RE.sub("", notes_val)
+            cleaned = _KANA_IN_NOTES_RE.sub("", cleaned).strip()
+            connection.execute(
+                "UPDATE language_vocab SET pronunciation = ?, notes = ?, updated_at = ? WHERE vocab_id = ?",
+                (romaji, cleaned, _utc_now(), row["vocab_id"]),
+            )
+            updated += 1
+        if updated:
+            connection.commit()
+    return updated

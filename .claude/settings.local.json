@@ -7,7 +7,8 @@
       "Bash(python -c \"from app.language_learning import get_language_dashboard; import json; result = get_language_dashboard\\(\\); print\\('OK'\\)\")",
       "Bash(python -c \"from app.language_learning import get_language_dashboard; get_language_dashboard\\(\\); print\\('OK'\\)\")",
       "Bash(python -c ' *)",
-      "Bash(xargs grep *)"
+      "Bash(xargs grep *)",
+      "Bash(npx tsc *)"
     ]
   }
 }
